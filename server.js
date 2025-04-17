@@ -14,7 +14,7 @@ app.use(cors());
 app.use(express.json());
 
 // --- Inicialização do Google AI e Configuração da Persona ---
-const apiKey = process.env.GOOGLE_API_KEY; // Carrega do .env
+const apiKey ="AIzaSyDF2R0xJwhiFR5C16Dx0mw7egJMTPOvcBA"; // Carrega do .env
 if (!apiKey) {
     console.error("ERRO FATAL: GOOGLE_API_KEY não encontrada no arquivo .env");
     process.exit(1);
