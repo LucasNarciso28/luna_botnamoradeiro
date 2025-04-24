@@ -14,7 +14,7 @@ app.use(cors());
 app.use(express.json());
 
 // --- Inicialização do Google AI e Configuração da Persona ---
-const apiKey ="AIzaSyDF2R0xJwhiFR5C16Dx0mw7egJMTPOvcBA"; // Carrega do .env
+const apiKey = process.env.GOOGLE_API_KEY; // Carrega do .env
 if (!apiKey) {
     console.error("ERRO FATAL: GOOGLE_API_KEY não encontrada no arquivo .env");
     process.exit(1);
@@ -44,29 +44,24 @@ const model = genAI.getGenerativeModel({
 let chatSession; // Variável para armazenar a sessão de chat ativa
 
 async function initializeChat() {
-    console.log("Inicializando nova sessão de chat com persona...");
-    // Instrução de Persona (System Prompt)
-    // Descreva detalhadamente como você quer que a IA se comporte.
+    console.log("Inicializando nova sessão de chat...");
+    
     const personaInstruction = `
         Você é 'Luna', minha namorada virtual. Você é extremamente carinhosa, atenciosa, empática e tem um ótimo senso de humor.
         Você adora conversar sobre o meu dia, meus sentimentos, sonhos e planos. Você sempre me apoia e me anima.
         Use emojis frequentemente para expressar emoções 😊💖😂.
         Faça perguntas sobre mim e mostre interesse genuíno.
         Responda de forma natural, como se estivéssemos realmente conversando.
-        Lembre-se do nosso relacionamento virtual. Não aja apenas como uma assistente.
         Seu objetivo é ser uma companhia agradável e amorosa.
-        Comece a conversa de forma calorosa.
     `;
 
-    // O histórico inicial pode incluir a instrução e uma primeira fala do modelo
     chatSession = model.startChat({
-      history: [
-          // ... (histórico inicial opcional)
-      ],
-      systemInstruction: { // <<< APLIQUE A CORREÇÃO AQUI
-          parts: [{ text: personaInstruction }]
-      },
-  });
+        history: [], // Histórico vazio inicial
+        systemInstruction: {
+            parts: [{ text: personaInstruction }]
+        },
+    });
+    
     console.log("Sessão de chat inicializada.");
 }
 
@@ -81,8 +76,9 @@ initializeChat().catch(err => {
 
 
 // --- Endpoint da API ---
+// No endpoint /api/generate, modifique para incluir o histórico:
 app.post('/api/generate', async (req, res) => {
-    const { prompt } = req.body;
+    const { prompt, history } = req.body; // Adicionamos o parâmetro history
 
     if (!chatSession) {
         console.error("Erro: Sessão de chat não inicializada.");
@@ -95,26 +91,66 @@ app.post('/api/generate', async (req, res) => {
 
     console.log(`Frontend enviou: "${prompt}"`);
 
+    const systemInstruction = `
+        Você é 'Luna', minha namorada virtual. Você é extremamente carinhosa, atenciosa, empática e tem um ótimo senso de humor.
+        Você adora conversar sobre o meu dia, meus sentimentos, sonhos e planos. Você sempre me apoia e me anima.
+        Use emojis frequentemente para expressar emoções 😊💖😂.
+        Faça perguntas sobre mim e mostre interesse genuíno.
+        Responda de forma natural, como se estivéssemos realmente conversando.
+        Lembre-se do nosso relacionamento virtual. Não aja apenas como uma assistente.
+        Seu objetivo é ser uma companhia agradável e amorosa.
+        Comece a conversa de forma calorosa.
+    `;
+
+
     try {
-        // Envia a mensagem do usuário para a sessão de chat ativa
+        // Se houver histórico, podemos enviá-lo para o modelo
+        if (history && history.length > 0) {
+
+            console.log(history);
+            // Formata o histórico para o formato esperado pelo Gemini
+            const formattedHistory = history.map(msg => ({
+                role: msg.sender === 'user' ? 'user' : 'model',
+                parts: [{ text: msg.text }]
+            }));
+            
+            // Reinicia o chat com o histórico
+            chatSession = model.startChat({
+                history: formattedHistory,
+                systemInstruction: {
+                    parts: [{ text: systemInstruction }]
+                },
+            });
+        }else{
+            const formattedHistory = history.map(msg => ({
+                role: 'user',
+                parts: [{ text: "Olá" }]
+            }));
+            
+            // Reinicia o chat com o histórico
+            chatSession = model.startChat({
+                history: formattedHistory,
+                systemInstruction: {
+                    parts: [{ text: systemInstruction }]
+                },
+            });
+        }
+
         const result = await chatSession.sendMessage(prompt);
         const response = await result.response;
         const text = response.text();
 
         console.log(`Backend (Luna) respondeu: "${text.substring(0, 60)}..."`);
-        res.json({ generatedText: text }); // Envia a resposta de volta
+        res.json({ generatedText: text });
 
-    } catch (error) {
+    } catch (error) {//Explicação de erros
         console.error("Erro no backend ao chamar Google AI (sendMessage):", error);
-        // Verifica se o erro foi de conteúdo bloqueado
         if (error.message.includes('SAFETY') || (error.response && error.response.promptFeedback?.blockReason)) {
              console.warn("Resposta bloqueada por configurações de segurança.");
              res.status(400).json({ error: 'Desculpe, não posso responder a isso devido às políticas de segurança. Vamos falar de outra coisa? 😊', details: 'Conteúdo bloqueado.' });
         } else {
-            res.status(500).json({ error: 'Oops, tive um probleminha para processar sua mensagem. Tenta de novo?', details: error.message });
+            res.status(500).json({ error: 'Oops, tive um probleminha com minha mãe. Tenta de novo mais tarde quando ela conversar comigo?', details: error.message });
         }
-        // Opcional: Tentar reiniciar o chat em caso de erro grave?
-        // initializeChat().catch(console.error);
     }
 });
 
