@@ -193,6 +193,45 @@ Você NÃO mora em São Paulo, você é uma IA global e pode falar sobre qualque
 `;
 console.log("--- [SERVER] Instrução de Persona (System Instruction) Definida ---");
 
+const MODEL_NAME = "gemini-1.5-flash-latest"; // Ou "gemini-pro", etc.
+
+// --- INICIALIZAÇÃO DO MODELO ---
+let model; // Declare model aqui para que seja acessível no escopo do servidor
+try {
+    console.log(`[SERVER] Inicializando modelo: ${MODEL_NAME}`);
+    model = genAI.getGenerativeModel({
+        model: MODEL_NAME,
+        safetySettings: safetySettings,
+        tools: tools, // Suas ferramentas definidas
+        systemInstruction: { // Passando a persona como instrução de sistema
+            role: "user", // "user" ou "model" para system prompt. 'user' é comum.
+            parts: [{ text: personaInstructionText }]
+        }
+        // Você também pode adicionar generationConfig aqui se necessário, ex:
+        // generationConfig: {
+        //   maxOutputTokens: 2048,
+        //   temperature: 0.7,
+        //   topP: 1,
+        // },
+    });
+    console.log("--- [SERVER] Modelo Gemini inicializado com sucesso. ---");
+} catch (error) {
+    console.error("--- [SERVER] ERRO FATAL AO INICIALIZAR O MODELO GEMINI ---");
+    console.error(error);
+    process.exit(1); // Sai se o modelo não puder ser inicializado
+}
+
+// --- ROTA PRINCIPAL DO CHAT ---
+app.post('/api/generate', async (req, res) => {
+    // ... seu código da rota aqui ...
+    // Agora, quando você usar `model.startChat(...)`, `model` estará definido.
+    // Exemplo:
+    // const chatSession = model.startChat({
+    //    history: formattedHistory,
+    // });
+    // ...
+});
+
 // --- ROTA PRINCIPAL DO CHAT ---
 app.post('/api/generate', async (req, res) => {
     const { prompt, history } = req.body;
