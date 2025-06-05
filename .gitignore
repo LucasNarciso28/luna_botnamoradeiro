@@ -25,7 +25,6 @@ Thumbs.db
 # Chaves de API e configurações sensíveis
 .env
 .env.*
-config/*.json
 
 # Pasta de dependências
 node_modules/
