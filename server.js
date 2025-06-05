@@ -19,16 +19,15 @@ const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY;
 
 if (!googleApiKey || googleApiKey === "SUA_CHAVE_GOOGLE_AI_AQUI") {
     console.error("ERRO FATAL: GOOGLE_API_KEY não encontrada ou não configurada no arquivo .env");
-    process.exit(1); // Termina a aplicação se a chave principal estiver ausente/incorreta
+    process.exit(1);
 }
 if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
     console.warn("AVISO: OPENWEATHERMAP_API_KEY não encontrada ou não configurada. A funcionalidade de clima não funcionará.");
-    // Não sair, mas alertar. A função getWeatherForCity tratará isso internamente.
 }
 
 const genAI = new GoogleGenerativeAI(googleApiKey);
 
-// --- FUNÇÕES-FERRAMENTA --- (sem alterações aqui, já parecem corretas)
+// --- FUNÇÕES-FERRAMENTA ---
 function getCurrentSaoPauloDateTime() {
     console.log("[SERVER TOOL] Executando getCurrentSaoPauloDateTime");
     const now = new Date();
@@ -85,7 +84,7 @@ async function getWeatherForCity(args) {
             if (data.cod === "401" || response.status === 401) {
                 userMessage = "Problema ao autenticar com o serviço de clima (API Key do OpenWeatherMap inválida).";
             } else if (data.cod === "404" || response.status === 404) {
-                // Mantém a mensagem, mas adiciona o detalhe da busca
+                // Mantém a mensagem
             } else {
                 userMessage = `Erro ao buscar o clima: ${data.message || `código ${data.cod || response.status}`}`;
             }
@@ -103,8 +102,7 @@ const availableFunctions = {
 };
 
 // --- CONFIGURAÇÃO DO MODELO GEMINI ---
-
-const tools = [ /* ... (tools definition remains the same) ... */
+const tools = [
     {
       functionDeclarations: [
         {
@@ -122,11 +120,11 @@ const tools = [ /* ... (tools definition remains the same) ... */
                       type: "STRING",
                       description: "O nome da cidade para a qual obter o clima. Exemplos: 'Paris', 'Salvador', 'Ouro Preto'."
                   },
-                  stateCode: { 
+                  stateCode: {
                       type: "STRING",
                       description: "Opcional. O código do estado ou província (ex: 'MG' para Minas Gerais, 'CA' para Califórnia) se fornecido ou inferido pelo usuário, para ajudar a desambiguar cidades com nomes comuns."
                   },
-                  countryCode: { 
+                  countryCode: {
                       type: "STRING",
                       description: "Opcional. O código do país de duas letras (ISO 3166-1 alpha-2, ex: 'BR' para Brasil, 'FR' para França) se fornecido ou inferido, para maior precisão."
                   }
@@ -138,7 +136,7 @@ const tools = [ /* ... (tools definition remains the same) ... */
     }
 ];
 
-const safetySettings = [ /* ... (safetySettings remain the same) ... */
+const safetySettings = [
     { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
     { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
     { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
@@ -181,25 +179,20 @@ Você NÃO mora em São Paulo, você é uma IA global e pode falar sobre qualque
 `;
 console.log("--- [SERVER] Instrução de Persona (System Instruction) Definida ---");
 
+// ***** MUDANÇA DE MODELO (REVERSÃO/SUGESTÃO) *****
+// Revertendo para gemini-1.5-pro-latest para evitar o erro 503 do gemini-2.0-flash,
+// ou o modelo que você estava usando antes e que funcionava.
+const modelName = "gemini-1.5-pro-latest"; // Mude aqui se necessário
+// const modelName = "gemini-pro"; // Outra opção, mas pode ter menos recursos
+console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 
-// *****************************************************************************
-// ***** CRÍTICO: Inicialização do Modelo GEMINI *****
-// *****************************************************************************
-// Use "gemini-1.5-pro-latest" para melhor suporte a systemInstruction e tool use.
-// Se precisar usar "gemini-pro", a systemInstruction pode precisar ser o primeiro
-// item do array de `history` na chamada `startChat`.
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash", // Ou "gemini-pro" se preferir/necessário
+    model: modelName,
     tools: tools,
     safetySettings: safetySettings,
-    // systemInstruction pode ser uma string ou um objeto ContentPart
-    // A forma como estava (objeto com role e parts) é mais robusta para modelos como 1.5 Pro
-    systemInstruction: { role: "user", parts: [{text: personaInstructionText}] }, // Ou apenas: personaInstructionText
-    // generationConfig pode ser definido aqui ou em startChat/sendMessage
-    // generationConfig: { temperature: 0.7 }
+    systemInstruction: { role: "user", parts: [{text: personaInstructionText}] },
 });
 console.log("--- [SERVER] Instância do Modelo Gemini CRIADA com sucesso. ---");
-// *****************************************************************************
 
 
 // --- ROTA PRINCIPAL DO CHAT ---
@@ -224,44 +217,31 @@ app.post('/api/generate', async (req, res) => {
             console.log(`[SERVER] Histórico formatado com ${formattedHistory.length} mensagens.`);
         }
 
-
-        // Para "gemini-pro" (não "gemini-1.5-pro-latest"), se systemInstruction não for
-        // suportado em getGenerativeModel, você o colocaria no início do histórico:
-        // const initialSystemMessage = { role: "user", parts: [{ text: personaInstructionText }] };
-        // const initialModelResponse = { role: "model", parts: [{ text: "Entendido, meu amor! Como posso te ajudar hoje? 🥰" }] };
-        // formattedHistory = [initialSystemMessage, initialModelResponse, ...formattedHistory];
-
         console.log("[SERVER] Iniciando chat com Gemini API...");
         const chatSession = model.startChat({
             history: formattedHistory,
-            generationConfig: { temperature: 0.7 } // Pode definir aqui também
-            // safetySettings e tools já estão no 'model' global
+            generationConfig: { temperature: 0.7 }
         });
         console.log("[SERVER] Sessão de chat iniciada. Enviando mensagem para Gemini API...");
 
         let result = await chatSession.sendMessage(prompt);
 
-        // Loop para lidar com chamadas de função (Tool Calling)
-        // eslint-disable-next-line no-constant-condition
         while (true) {
-            // ***** CORREÇÃO CRÍTICA AQUI *****
-            // Acessar functionCalls como um método da resposta.
-            const functionCalls = result.response.functionCalls(); // Anteriormente: result.response.functionCalls (que podia ser uma propriedade ou um método)
+            const functionCalls = result.response.functionCalls();
 
             if (functionCalls && functionCalls.length > 0) {
                 console.log("[SERVER] Modelo solicitou chamada de função:", JSON.stringify(functionCalls, null, 2));
                 
                 const functionResponses = [];
-                for (const call of functionCalls) { // functionCalls é um array de FunctionCall
+                for (const call of functionCalls) {
                     const functionToCall = availableFunctions[call.name];
                     if (functionToCall) {
-                        // call.args já é o objeto de argumentos parseado
                         const apiResponse = await functionToCall(call.args);
                         console.log(`[SERVER] Resposta da função ${call.name}:`, JSON.stringify(apiResponse));
                         functionResponses.push({
                             functionResponse: {
                                 name: call.name,
-                                response: apiResponse, // apiResponse deve ser o objeto de resultado da função
+                                response: apiResponse,
                             },
                         });
                     } else {
@@ -274,17 +254,9 @@ app.post('/api/generate', async (req, res) => {
                         });
                     }
                 }
-                
-                // Envia todas as respostas das funções de volta para o modelo
-                // O formato para sendMessage esperando FunctionResponsePart[] é apenas o array de FunctionResponsePart.
-                // A SDK envolve isso corretamente se você passar o array de objetos FunctionResponsePart.
-                // Cada objeto no array functionResponses já está no formato FunctionResponsePart.
-                result = await chatSession.sendMessage(functionResponses); 
-                // O loop continua para que o modelo possa usar a(s) saída(s) da(s) função(ões)
-
+                result = await chatSession.sendMessage(functionResponses);
             } else {
-                // Se não houver mais chamadas de função, o modelo forneceu uma resposta de texto
-                break; // Sai do loop
+                break;
             }
         }
 
@@ -293,11 +265,36 @@ app.post('/api/generate', async (req, res) => {
         res.json({ generatedText: finalText });
 
     } catch (error) {
-        // ... (bloco catch sem alterações, já parece robusto) ...
         console.error("[SERVER] Erro CRÍTICO no backend ao chamar Google AI ou processar função:", error);
+        // Logar o objeto de erro completo para melhor depuração
+        console.error("Detalhes completos do erro no backend:", JSON.stringify(error, Object.getOwnPropertyNames(error)));
+
         let errorMessage = 'Oops, tive um probleminha aqui do meu lado e não consegui responder. Tenta de novo mais tarde, amor? 😢';
-        let errorDetails = error.message;
+        let errorDetails = error.message; // Mensagem principal do erro
         let statusCode = 500;
+
+        // Tentar extrair mais detalhes se for um erro da API do Google
+        if (error.cause && typeof error.cause === 'string') { // Para erros da API Google, às vezes a causa é uma string JSON
+             try {
+                const causeObj = JSON.parse(error.cause);
+                if(causeObj.error && causeObj.error.message) {
+                    errorDetails = causeObj.error.message;
+                }
+             } catch(e) { /* ignore parse error */ }
+        } else if (error.message && (error.message.includes("fetch") || error.message.includes("Request failed"))) {
+            // Para erros de fetch/rede, a mensagem já é informativa.
+            // Se a mensagem já incluir "Service Unavailable" ou "Too Many Requests", podemos usar a mensagem mais amigável.
+            if (error.message.includes("503") || error.message.includes("Service Unavailable")){
+                errorMessage = "Parece que o serviço da IA está um pouquinho sobrecarregado agora, meu bem. 🥺 Poderia tentar de novo em alguns instantes?";
+                statusCode = 503;
+            } else if (error.message.includes("429") || error.message.includes("Too Many Requests")) {
+                errorMessage = "Acho que conversamos demais por hoje e atingi meu limite de cota com a IA, amor! 😅 Preciso descansar um pouquinho ou que meu criador veja isso.";
+                statusCode = 429;
+            } else {
+                errorMessage = "Tive um problema de comunicação para buscar sua resposta, meu bem. Pode ser a minha conexão com o 'mundo exterior' ou a do servidor. 📶";
+            }
+        }
+
 
         if (error.response && error.response.promptFeedback) {
             const feedback = error.response.promptFeedback;
@@ -314,14 +311,9 @@ app.post('/api/generate', async (req, res) => {
         } else if (error.message && error.message.toUpperCase().includes('API_KEY')) {
             errorMessage = "Parece que há um problema com a minha conexão principal (API Key do Google). Vou precisar que meu criador verifique isso! 😱";
             errorDetails = "Verifique a configuração da GOOGLE_API_KEY no arquivo .env e se ela é válida.";
-            statusCode = 500;
+            statusCode = 500; // Mantém 500 pois é um erro de configuração crítica do servidor
              console.error("[SERVER] ERRO RELACIONADO À API KEY DO GOOGLE:", error.message);
-        } else if (error.message && error.message.includes("fetch")) {
-             errorMessage = "Tive um problema de comunicação para buscar sua resposta, meu bem. Pode ser a minha conexão com o 'mundo exterior' ou a do servidor. 📶";
-             errorDetails = error.message;
-             statusCode = 500;
-             console.error("[SERVER] ERRO DE FETCH (REDE?):", error.message);
-        } else if (error.message && error.message.includes("model is not defined")) { // Erro específico
+        } else if (error.message && error.message.includes("model is not defined")) {
             errorMessage = "Oh, céus! Parece que não consegui me 'inicializar' direito aqui dentro. Meu criador precisa dar uma olhadinha no meu código-fonte! 🛠️";
             errorDetails = "A variável 'model' não foi definida. Verifique a inicialização de `genAI.getGenerativeModel`.";
             statusCode = 500;
@@ -330,8 +322,8 @@ app.post('/api/generate', async (req, res) => {
     }
 });
 
-// Endpoint para data/hora inicial no frontend (sem alterações)
-app.get('/api/datetime', (req, res) => { /* ... (código sem alterações) ... */
+// Endpoint para data/hora inicial no frontend
+app.get('/api/datetime', (req, res) => {
     try {
         const now = new Date();
         const options = {
@@ -351,14 +343,12 @@ app.get('/api/datetime', (req, res) => { /* ... (código sem alterações) ... *
     }
 });
 
-app.listen(port, () => { // ... (bloco listen sem alterações significativas, exceto logs)
+app.listen(port, () => {
     console.log(`--- [SERVER] Backend (Servidor da Luna 😉) rodando em http://localhost:${port} ---`);
     if (process.env.GOOGLE_API_KEY && process.env.GOOGLE_API_KEY !== "SUA_CHAVE_GOOGLE_AI_AQUI") {
         console.log("--- [SERVER] GOOGLE_API_KEY está presente e parece configurada. ---");
     } else if (process.env.GOOGLE_API_KEY === "SUA_CHAVE_GOOGLE_AI_AQUI") {
          console.error("--- [SERVER] ALERTA: GOOGLE_API_KEY está com valor placeholder 'SUA_CHAVE_GOOGLE_AI_AQUI'. Substitua pela sua chave real! ---");
-    } else { // Esta condição já é coberta pelo process.exit(1) no início, mas para fins de log no listen:
-        console.error("--- [SERVER] ALERTA CRÍTICO: GOOGLE_API_KEY NÃO ESTÁ DEFINIDA NO AMBIENTE (.env)! O CHAT NÃO FUNCIONARÁ. (Aplicação deveria ter saído antes). ---");
     }
 
     if (process.env.OPENWEATHERMAP_API_KEY && process.env.OPENWEATHERMAP_API_KEY !== "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
