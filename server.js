@@ -4,6 +4,7 @@ import express from 'express';
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 import dotenv from 'dotenv';
 import cors from 'cors';
+import { MongoClient } from 'mongodb';
 // fetch é global no Node.js v18+
 
 dotenv.config();
@@ -13,6 +14,51 @@ const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// --- CONFIGURAÇÃO INICIAL E MIDDLEWARE ---
+// Habilita o Express a confiar em proxies, essencial para pegar o IP correto no Render
+app.set('trust proxy', 1);
+
+// Habilita o CORS para TODAS as rotas. Deve vir antes das definições de rota.
+app.use(cors());
+
+// Habilita o parse de JSON no corpo das requisições.
+app.use(express.json());
+
+
+// --- INÍCIO: CONFIGURAÇÕES DA ATIVIDADE B2.P1.A7 ---
+
+// 1. Conexão com MongoDB Atlas
+const mongoUri = process.env.MONGO_VAG;
+if (!mongoUri) {
+    console.error("ERRO FATAL: MONGO_URI não encontrada no arquivo .env. A aplicação não pode iniciar.");
+    process.exit(1); // Encerra a aplicação se a URI do banco não estiver configurada
+}
+
+// Nome do banco e coleção fornecidos pelo professor
+const dbName = "IIW2023A_Logs";
+const logCollectionName = "LUNA";
+
+let db; // Variável para armazenar a conexão com o banco
+
+// Função para conectar ao banco de dados
+async function connectDB() {
+    if (db) return db;
+    try {
+        const client = new MongoClient(mongoUri);
+        await client.connect();
+        db = client.db(dbName);
+        console.log(`Conectado com sucesso ao MongoDB Atlas, no banco: ${dbName}!`);
+        return db;
+    } catch (error) {
+        console.error("Erro CRÍTICO ao conectar ao MongoDB Atlas:", error);
+        process.exit(1);
+    }
+}
+
+// 2. Simulação do Armazenamento de Ranking
+let dadosRankingVitrine = [];
+
 
 const googleApiKey = process.env.GOOGLE_API_KEY;
 const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY;
@@ -25,7 +71,88 @@ if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_
     console.warn("AVISO: OPENWEATHERMAP_API_KEY não encontrada ou não configurada. A funcionalidade de clima não funcionará.");
 }
 
+// ENDPOINT 1: Registrar Log de Acesso do Usuário
+// Esta rota será chamada pelo frontend sempre que a página carregar.
+app.post('/api/log-connection', async (req, res) => {
+    console.log("[LOG] Recebida requisição em /api/log-connection");
+    const { acao } = req.body; // Pegamos apenas a 'ação' do corpo da requisição
+
+    // O IP será pego diretamente da requisição, é mais seguro e simples
+    // O 'req.ip' funciona graças ao app.set('trust proxy', 1); que adicionamos no início
+    const ip = req.ip;
+
+    if (!ip || !acao) {
+        console.error("[LOG] Erro: Dados de log incompletos.", { ip, acao });
+        return res.status(400).json({ error: "Dados de log incompletos (IP e ação são obrigatórios)." });
+    }
+
+    try {
+        // Formatando a data e a hora no backend, como pedido
+        const agora = new Date();
+        const dataFormatada = agora.toISOString().split('T')[0]; // Formato YYYY-MM-DD
+        const horaFormatada = agora.toTimeString().split(' ')[0]; // Formato HH:MM:SS
+
+        // Montando o objeto EXATAMENTE como a especificação pede
+        const logEntry = {
+            col_data: dataFormatada,
+            col_hora: horaFormatada,
+            col_IP: ip,
+            col_acao: acao
+        };
+
+        const collection = db.collection(logCollectionName);
+        const result = await collection.insertOne(logEntry);
+
+        console.log(`[LOG] Log inserido com sucesso no MongoDB! ID: ${result.insertedId}`);
+        res.status(201).json({ message: "Log registrado com sucesso!", entry: logEntry });
+
+    } catch (error) {
+        console.error("[LOG] Erro ao inserir log no MongoDB:", error);
+        res.status(500).json({ error: "Erro interno ao registrar o log." });
+    }
+});
+
+// ENDPOINT 2: Registrar Acesso para o Ranking do Bot (Simulado)
+app.post('/api/ranking/registrar-acesso-bot', (req, res) => {
+    const { botId, nomeBot } = req.body; // Opcionalmente, pode receber timestampAcesso e usuarioId
+
+    if (!botId || !nomeBot) {
+        return res.status(400).json({ error: "ID e Nome do Bot são obrigatórios para o ranking." });
+    }
+
+    // Lógica para adicionar/atualizar o ranking
+    const botExistente = dadosRankingVitrine.find(b => b.botId === botId);
+
+    if (botExistente) {
+        // Se o bot já existe no nosso array, só incrementa a contagem
+        botExistente.contagem += 1;
+        botExistente.ultimoAcesso = new Date(); // Atualiza a data do último acesso
+    } else {
+        // Se for o primeiro acesso, adiciona um novo objeto ao array
+        dadosRankingVitrine.push({
+            botId: botId,
+            nomeBot: Luna_Namoradeira,
+            contagem: 1, // Começa com 1 acesso
+            ultimoAcesso: new Date()
+        });
+    }
+
+    console.log('[RANKING] Dados de ranking atualizados:', dadosRankingVitrine);
+    res.status(201).json({ message: `Acesso ao bot ${nomeBot} registrado para ranking.` });
+});
+
+
+// ENDPOINT 3 (OPCIONAL, MAS ÚTIL): Visualizar o Ranking
+// Permite que você acesse essa URL no navegador para ver como está o placar
+app.get('/api/ranking/visualizar', (req, res) => {
+    // Ordena o ranking pela contagem, do maior para o menor
+    const rankingOrdenado = [...dadosRankingVitrine].sort((a, b) => b.contagem - a.contagem);
+    res.json(rankingOrdenado);
+});
+
+
 const genAI = new GoogleGenerativeAI(googleApiKey);
+
 
 // --- FUNÇÕES-FERRAMENTA ---
 function getCurrentSaoPauloDateTime() {
