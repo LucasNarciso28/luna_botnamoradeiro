@@ -34,8 +34,8 @@ if (!mongoUri) {
   console.error("ERRO FATAL: A variável de ambiente MONGO_VAG não foi definida. A aplicação não pode iniciar.");
   process.exit(1);
 }
-if (!googleApiKey || googleApiKey === "SUA_CHAVE_GOOGLE_AI_AQUI") {
-  console.error("ERRO FATAL: A variável de ambiente GOOGLE_API_KEY não foi definida ou está com valor placeholder.");
+if (!googleApiKey || googleApiKey === "AIzaSyDu4WdegQ5v0HQtpLnPWFCQtaF8eb6-PWw") {
+  console.error("ERRO FATAL: A variável de ambiente GOOGLE_API_KEY não foi definida ou está com valor placeholder.", process.env.GOOGLE_API_KEY);
   process.exit(1);
 }
 if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
@@ -351,7 +351,7 @@ console.log(
 // ***** MUDANÇA DE MODELO (REVERSÃO/SUGESTÃO) *****
 // Revertendo para gemini-1.5-pro-latest para evitar o erro 503 do gemini-2.0-flash,
 // ou o modelo que você estava usando antes e que funcionava.
-const modelName = "gemini-1.5-pro-latest"; // Mude aqui se necessário
+const modelName = "gemini-2.0-flash"; // Mude aqui se necessário
 // const modelName = "gemini-pro"; // Outra opção, mas pode ter menos recursos
 console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 
@@ -367,7 +367,7 @@ const model = genAI.getGenerativeModel({
 console.log("--- [SERVER] Instância do Modelo Gemini CRIADA com sucesso. ---");
 
 // --- ROTA PRINCIPAL DO CHAT ---
-app.post("/api/generate", async (req, res) => {
+app.post("/api/generate", async (req, res) =>{ 
   console.log(`\n--- [SERVER] Nova Requisição para /api/generate ---`);
   const { prompt, history } = req.body;
 
@@ -429,20 +429,28 @@ app.post("/api/generate", async (req, res) => {
     res.json({ generatedText: finalText });
 
   } catch (error) {
-    // Bloco de tratamento de erros (seu código aqui já estava bom)
-    console.error("[SERVER] Erro CRÍTICO no backend ao chamar a API do Google:", error);
-    let errorMessage = "Oops, tive um probleminha aqui e não consegui responder. Tenta de novo, amor? 😢";
-    let statusCode = 500;
-    if (error.message && (error.message.includes("503") || error.message.includes("Service Unavailable"))) {
-        errorMessage = "Parece que o serviço da IA está um pouquinho sobrecarregado, meu bem. 🥺 Tenta de novo em instantes?";
-        statusCode = 503;
-    } else if (error.response?.promptFeedback?.blockReason) {
-        errorMessage = `Desculpe, não posso responder a isso (${error.response.promptFeedback.blockReason}). Vamos falar de outra coisa? 😊`;
-        statusCode = 400;
-    } else if (error.message?.toUpperCase().includes("API_KEY")) {
-        errorMessage = "Ah, não! Minha conexão principal com a IA falhou (problema na API Key). Meu criador precisa ver isso! 😱";
+      console.error("[SERVER] Erro CRÍTICO no backend ao chamar a API do Google:", error);
+      
+      let errorMessage = "Oops, tive um probleminha aqui do meu lado e não consegui responder. Tenta de novo mais tarde, amor? 😢";
+      let statusCode = 500;
+      
+      // --- INÍCIO DA CORREÇÃO ---
+      // Checagem mais robusta para o erro de cota (429)
+      if (error.message && (error.message.includes("429") || (error.gaxios && error.gaxios.code === '429'))) {
+          errorMessage = "Acho que conversamos demais por hoje e atingi meu limite de cota com a IA, amor! 😅 Preciso descansar um pouquinho ou que meu criador veja isso.";
+          statusCode = 429;
+      } 
+      // Outras checagens de erro...
+      else if (error.message && (error.message.includes("503") || error.message.includes("Service Unavailable"))) {
+          errorMessage = "Parece que o serviço da IA está um pouquinho sobrecarregado, meu bem. 🥺 Tenta de novo em instantes?";
+          statusCode = 503;
+      } else if (error.response?.promptFeedback?.blockReason) {
+          errorMessage = `Desculpe, não posso responder a isso (${error.response.promptFeedback.blockReason}). Vamos falar de outra coisa? 😊`;
+          statusCode = 400;
+      } else if (error.message?.toUpperCase().includes("API_KEY")) {
+          errorMessage = "Ah, não! Minha conexão principal com a IA falhou (problema na API Key). Meu criador precisa ver isso! 😱";
     }
-    res.status(statusCode).json({ error: errorMessage, details: error.message });
+      res.status(statusCode).json({ error: errorMessage, details: error.message });
   }
 });
 
@@ -452,7 +460,7 @@ app.get("/api/datetime", (req, res) => {
     const now = new Date();
     const options = {
       weekday: "long",
-      day: "2-digit",
+      day: "2-digit",  
       month: "long",
       year: "numeric",
       hour: "2-digit",
