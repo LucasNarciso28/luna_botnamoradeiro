@@ -7,6 +7,8 @@ import {
 import dotenv from "dotenv";
 import cors from "cors";
 import { MongoClient } from "mongodb";
+import ChatSession from './chatsession.js'
+
 
 dotenv.config();
 
@@ -31,19 +33,32 @@ const googleApiKey = process.env.GOOGLE_API_KEY;
 const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY;
 
 if (!mongoUri) {
-  console.error("ERRO FATAL: A variável de ambiente MONGO_VAG não foi definida. A aplicação não pode iniciar.");
+  console.error(
+    "ERRO FATAL: A variável de ambiente MONGO_VAG não foi definida. A aplicação não pode iniciar."
+  );
   process.exit(1);
 }
-if (!googleApiKey || googleApiKey === "AIzaSyDu4WdegQ5v0HQtpLnPWFCQtaF8eb6-PWw") {
-  console.error("ERRO FATAL: A variável de ambiente GOOGLE_API_KEY não foi definida ou está com valor placeholder.", process.env.GOOGLE_API_KEY);
+if (
+  !googleApiKey ||
+  googleApiKey === "AIzaSyDu4WdegQ5v0HQtpLnPWFCQtaF8eb6-PWw"
+) {
+  console.error(
+    "ERRO FATAL: A variável de ambiente GOOGLE_API_KEY não foi definida ou está com valor placeholder.",
+    process.env.GOOGLE_API_KEY
+  );
   process.exit(1);
 }
-if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
-  console.warn("AVISO: OPENWEATHERMAP_API_KEY não configurada. A funcionalidade de clima não funcionará.");
+if (
+  !openWeatherMapApiKey ||
+  openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI"
+) {
+  console.warn(
+    "AVISO: OPENWEATHERMAP_API_KEY não configurada. A funcionalidade de clima não funcionará."
+  );
 }
 
 const dbName = "IIW2023A_Logs";
-const logCollectionName = "LUNA";
+const logCollectionName = "tb_cl_user_log_acess";
 
 let db; // Variável para armazenar a conexão com o banco
 
@@ -54,7 +69,9 @@ async function connectDB() {
     const client = new MongoClient(mongoUri);
     await client.connect();
     db = client.db(dbName);
-    console.log(`[SERVER] Conectado com sucesso ao MongoDB, no banco: ${dbName}!`);
+    console.log(
+      `[SERVER] Conectado com sucesso ao MongoDB, no banco: ${dbName}!`
+    );
     return db;
   } catch (error) {
     console.error("[SERVER] Erro CRÍTICO ao conectar ao MongoDB Atlas:", error);
@@ -75,7 +92,11 @@ app.post("/api/log-connection", async (req, res) => {
   const ip = req.ip;
 
   if (!ip || !acao) {
-    return res.status(400).json({ error: "Dados de log incompletos (IP e ação são obrigatórios)." });
+    return res
+      .status(400)
+      .json({
+        error: "Dados de log incompletos (IP e ação são obrigatórios).",
+      });
   }
 
   try {
@@ -94,7 +115,9 @@ app.post("/api/log-connection", async (req, res) => {
     const result = await collection.insertOne(logEntry);
 
     console.log(`[LOG] Log inserido com sucesso! ID: ${result.insertedId}`);
-    res.status(201).json({ message: "Log registrado com sucesso!", entry: logEntry });
+    res
+      .status(201)
+      .json({ message: "Log registrado com sucesso!", entry: logEntry });
   } catch (error) {
     console.error("[LOG] Erro ao inserir log no MongoDB:", error);
     res.status(500).json({ error: "Erro interno ao registrar o log." });
@@ -106,7 +129,9 @@ app.post("/api/ranking/registrar-acesso-bot", (req, res) => {
   const { botId, nomeBot } = req.body;
 
   if (!botId || !nomeBot) {
-    return res.status(400).json({ error: "ID e Nome do Bot são obrigatórios para o ranking." });
+    return res
+      .status(400)
+      .json({ error: "ID e Nome do Bot são obrigatórios para o ranking." });
   }
 
   const botExistente = dadosRankingVitrine.find((b) => b.botId === botId);
@@ -115,22 +140,132 @@ app.post("/api/ranking/registrar-acesso-bot", (req, res) => {
     botExistente.contagem += 1;
     botExistente.ultimoAcesso = new Date();
   } else {
-    dadosRankingVitrine.push({ botId, nomeBot, contagem: 1, ultimoAcesso: new Date() });
+    dadosRankingVitrine.push({
+      botId,
+      nomeBot,
+      contagem: 1,
+      ultimoAcesso: new Date(),
+    });
   }
 
   console.log("[RANKING] Dados de ranking atualizados:", dadosRankingVitrine);
-  res.status(201).json({ message: `Acesso ao bot ${nomeBot} registrado para ranking.` });
+  res
+    .status(201)
+    .json({ message: `Acesso ao bot ${nomeBot} registrado para ranking.` });
 });
 
 // ENDPOINT 3 (ÚTIL): Visualizar o Ranking
 app.get("/api/ranking/visualizar", (req, res) => {
-  const rankingOrdenado = [...dadosRankingVitrine].sort((a, b) => b.contagem - a.contagem);
+  const rankingOrdenado = [...dadosRankingVitrine].sort(
+    (a, b) => b.contagem - a.contagem
+  );
   res.json(rankingOrdenado);
 });
 
 const genAI = new GoogleGenerativeAI(googleApiKey);
 
+// --- ENDPOINT PARA BUSCAR HISTÓRICOS DE CHAT ---
+
+app.get("/api/chat/historicos", async (req, res) => {
+  console.log("[SERVER] Buscando históricos de chat...");
+
+  try {
+    const collection = db.collection("tb_cl_chat_sessions");
+    const historicos = await collection
+      .find({})
+      .sort({ startTime: -1 }) // Mais recentes primeiro
+      .limit(10) // Limitar a 10 resultados
+      .toArray();
+
+    console.log(`[SERVER] ${historicos.length} históricos encontrados`);
+    res.json(historicos);
+  } catch (error) {
+    console.error("[SERVER] Erro ao buscar históricos:", error);
+    res
+      .status(500)
+      .json({ error: "Erro interno ao buscar históricos de chat." });
+  }
+});
+
+// Endpoint para salvar sessões de chat
+app.post('/api/chat/save-session', async (req, res) => {
+  const { sessionId, messages, userIP } = req.body;
+  
+  if (!sessionId || !messages || !userIP || !Array.isArray(messages)) {
+    return res.status(400).json({ error: "Dados incompletos para salvar sessão" });
+  }
+
+  try {
+    const collection = db.collection("tb_cl_chat_sessions");
+    
+    const sessionData = {
+      sessionId,
+      botId: 'luna-namoradeira',
+      startTime: new Date(messages[0].timestamp),
+      endTime: new Date(messages[messages.length - 1].timestamp),
+      messages,
+      userIP,
+      duration: Math.floor((
+        new Date(messages[messages.length - 1].timestamp) - 
+        new Date(messages[0].timestamp)
+      ) / 1000
+    )}; 
+
+    await collection.insertOne(sessionData);
+    res.status(201).json({ message: "Sessão salva com sucesso!" });
+  } catch (error) {
+    console.error("[SERVER] Erro ao salvar sessão:", error);
+    res.status(500).json({ error: "Erro ao salvar sessão de chat" });
+  }
+});
+
+// Endpoint para buscar históricos
+app.get('/api/chat/historicos', async (req, res) => {
+  try {
+    const collection = db.collection("tb_cl_chat_sessions");
+    const historicos = await collection.find({})
+      .sort({ startTime: -1 })
+      .limit(10)
+      .project({
+        sessionId: 1,
+        startTime: 1,
+        endTime: 1,
+        duration: 1,
+        userIP: 1,
+        messageCount: { $size: "$messages" }
+      })
+      .toArray();
+
+    console.log(`[SERVER] ${historicos.length} históricos encontrados`);
+    res.json(historicos);
+  } catch (error) {
+    console.error("[SERVER] Erro ao buscar históricos:", error);
+    res.status(500).json({ error: "Erro interno ao buscar históricos de chat." });
+  }
+});
+
+// Endpoint para detalhes da sessão
+app.get('/api/chat/historicos/:sessionId', async (req, res) => {
+  try {
+    const collection = db.collection("tb_cl_chat_sessions");
+    const session = await collection.findOne({ 
+      sessionId: req.params.sessionId 
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: "Sessão não encontrada" });
+    }
+
+    res.json(session);
+  } catch (error) {
+    console.error("[SERVER] Erro ao buscar sessão:", error);
+    res.status(500).json({ error: "Erro ao buscar detalhes da sessão" });
+  }
+});
+
 // --- FUNÇÕES-FERRAMENTA ---
+
+// --- FUNÇÃO PARA OBTER DATA/HORA ATUAL DE SÃO PAULO ---
 function getCurrentSaoPauloDateTime() {
   console.log("[SERVER TOOL] Executando getCurrentSaoPauloDateTime");
   const now = new Date();
@@ -154,6 +289,7 @@ function getCurrentSaoPauloDateTime() {
   return { currentDateTime: formattedDateTime };
 }
 
+// --- FUNÇÃO PARA BUSCAR CLIMA DE UMA CIDADE ---
 async function getWeatherForCity(args) {
   let { cityName, countryCode, stateCode } = args;
   console.log(
@@ -250,6 +386,76 @@ const availableFunctions = {
   get_current_sao_paulo_datetime: getCurrentSaoPauloDateTime,
   get_weather_for_city: getWeatherForCity,
 };
+
+async function carregarHistoricoSessoes() {
+  try {
+    const response = await fetch(`${backendBaseUrl}/api/chat/historicos`);
+    if (!response.ok) throw new Error(`Erro ${response.status}`);
+
+    const sessoes = await response.json();
+    const lista = document.getElementById("lista-sessoes");
+    lista.innerHTML = "";
+
+    sessoes.forEach((sessao) => {
+      const li = document.createElement("li");
+      const data = new Date(sessao.startTime).toLocaleString("pt-BR");
+      li.textContent = `Conversa em ${data}`;
+      li.style.cursor = "pointer";
+      li.style.margin = "5px 0";
+      li.style.padding = "8px";
+      li.style.backgroundColor = "#e6ccff";
+      li.style.borderRadius = "8px";
+
+      li.addEventListener("click", () =>
+        exibirConversaDetalhada(sessao.messages)
+      );
+      lista.appendChild(li);
+    });
+  } catch (error) {
+    console.error("Erro ao carregar histórico:", error);
+    addMessageToLog("error", "Não consegui carregar o histórico 😢", false);
+  }
+}
+
+// Exibir conversa detalhada
+function exibirConversaDetalhada(messages) {
+  const container = document.getElementById("visualizacao-conversa-detalhada");
+  container.innerHTML = "<h3>Detalhes da Conversa</h3>";
+
+  messages.forEach((msg) => {
+    const msgDiv = document.createElement("div");
+    msgDiv.classList.add("message-container");
+    msgDiv.classList.add(
+      msg.sender === "user" ? "user-message-container" : "ai-message-container"
+    );
+
+    const textDiv = document.createElement("div");
+    textDiv.classList.add("message");
+    textDiv.classList.add(
+      msg.sender === "user" ? "user-message" : "ai-message"
+    );
+    textDiv.textContent = msg.text;
+
+    msgDiv.appendChild(textDiv);
+    container.appendChild(msgDiv);
+  });
+}
+
+// Event listeners para botões
+document.getElementById("btn-historico").addEventListener("click", () => {
+  document.getElementById("historico-container").style.display = "block";
+  document.getElementById("chat-log").style.display = "none";
+  document.getElementById("btn-historico").style.display = "none";
+  document.getElementById("btn-voltar-chat").style.display = "inline-block";
+  carregarHistoricoSessoes();
+});
+
+document.getElementById("btn-voltar-chat").addEventListener("click", () => {
+  document.getElementById("historico-container").style.display = "none";
+  document.getElementById("chat-log").style.display = "block";
+  document.getElementById("btn-historico").style.display = "inline-block";
+  document.getElementById("btn-voltar-chat").style.display = "none";
+});
 
 // --- CONFIGURAÇÃO DO MODELO GEMINI ---
 const tools = [
@@ -348,11 +554,7 @@ console.log(
   "--- [SERVER] Instrução de Persona (System Instruction) Definida ---"
 );
 
-// ***** MUDANÇA DE MODELO (REVERSÃO/SUGESTÃO) *****
-// Revertendo para gemini-1.5-pro-latest para evitar o erro 503 do gemini-2.0-flash,
-// ou o modelo que você estava usando antes e que funcionava.
 const modelName = "gemini-2.0-flash"; // Mude aqui se necessário
-// const modelName = "gemini-pro"; // Outra opção, mas pode ter menos recursos
 console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 
 const model = genAI.getGenerativeModel({
@@ -367,7 +569,7 @@ const model = genAI.getGenerativeModel({
 console.log("--- [SERVER] Instância do Modelo Gemini CRIADA com sucesso. ---");
 
 // --- ROTA PRINCIPAL DO CHAT ---
-app.post("/api/generate", async (req, res) =>{ 
+app.post("/api/generate", async (req, res) => {
   console.log(`\n--- [SERVER] Nova Requisição para /api/generate ---`);
   const { prompt, history } = req.body;
 
@@ -376,25 +578,30 @@ app.post("/api/generate", async (req, res) =>{
   }
   console.log(`[SERVER] Prompt Recebido: "${prompt}"`);
 
-   try {
+  try {
     // 1. Formata o histórico recebido do frontend
-    const formattedHistory = (history && Array.isArray(history))
-      ? history.map((msg) => ({
-          role: msg.sender === "user" ? "user" : "model",
-          parts: [{ text: msg.text }],
-        }))
-      : [];
+    const formattedHistory =
+      history && Array.isArray(history)
+        ? history.map((msg) => ({
+            role: msg.sender === "user" ? "user" : "model",
+            parts: [{ text: msg.text }],
+          }))
+        : [];
 
     // 2. CORREÇÃO: Garante que o histórico enviado para a API comece com 'user'
     let validHistory = formattedHistory;
-    while (validHistory.length > 0 && validHistory[0].role !== 'user') {
-      console.log("[SERVER] Validação: Removendo mensagem inicial do 'model' do histórico.");
+    while (validHistory.length > 0 && validHistory[0].role !== "user") {
+      console.log(
+        "[SERVER] Validação: Removendo mensagem inicial do 'model' do histórico."
+      );
       validHistory.shift(); // Remove o primeiro elemento se for 'model'
     }
-    
+
     // 3. CORREÇÃO DO LOG: Agora loga o tamanho do histórico CORRIGIDO
-    console.log(`[SERVER] Iniciando chat com histórico válido de ${validHistory.length} mensagens.`);
-    
+    console.log(
+      `[SERVER] Iniciando chat com histórico válido de ${validHistory.length} mensagens.`
+    );
+
     // 4. Inicia a sessão de chat com o histórico JÁ VALIDADO
     const chatSession = model.startChat({
       history: validHistory, // Garante que estamos usando a variável correta
@@ -403,54 +610,79 @@ app.post("/api/generate", async (req, res) =>{
 
     // 5. Envia o prompt do usuário
     let result = await chatSession.sendMessage(prompt);
-    
+
     // Loop para lidar com chamadas de função (seu código aqui já estava bom)
     while (true) {
-        const functionCalls = result.response.functionCalls();
-        if (!functionCalls || functionCalls.length === 0) {
-            break;
-        }
+      const functionCalls = result.response.functionCalls();
+      if (!functionCalls || functionCalls.length === 0) {
+        break;
+      }
 
-        console.log("[SERVER] Modelo solicitou chamada de função:", JSON.stringify(functionCalls, null, 2));
-        
-        const functionResponses = await Promise.all(
-            functionCalls.map(async (call) => {
-                const functionToCall = availableFunctions[call.name];
-                const apiResponse = functionToCall ? await functionToCall(call.args) : { error: true, message: `Função ${call.name} não implementada.` };
-                return { functionResponse: { name: call.name, response: apiResponse } };
-            })
-        );
-        
-        result = await chatSession.sendMessage(functionResponses);
+      console.log(
+        "[SERVER] Modelo solicitou chamada de função:",
+        JSON.stringify(functionCalls, null, 2)
+      );
+
+      const functionResponses = await Promise.all(
+        functionCalls.map(async (call) => {
+          const functionToCall = availableFunctions[call.name];
+          const apiResponse = functionToCall
+            ? await functionToCall(call.args)
+            : { error: true, message: `Função ${call.name} não implementada.` };
+          return {
+            functionResponse: { name: call.name, response: apiResponse },
+          };
+        })
+      );
+
+      result = await chatSession.sendMessage(functionResponses);
     }
 
     const finalText = result.response.text();
-    console.log(`[SERVER] Resposta final da IA: "${finalText.substring(0, 100)}..."`);
+    console.log(
+      `[SERVER] Resposta final da IA: "${finalText.substring(0, 100)}..."`
+    );
     res.json({ generatedText: finalText });
-
   } catch (error) {
-      console.error("[SERVER] Erro CRÍTICO no backend ao chamar a API do Google:", error);
-      
-      let errorMessage = "Oops, tive um probleminha aqui do meu lado e não consegui responder. Tenta de novo mais tarde, amor? 😢";
-      let statusCode = 500;
-      
-      // --- INÍCIO DA CORREÇÃO ---
-      // Checagem mais robusta para o erro de cota (429)
-      if (error.message && (error.message.includes("429") || (error.gaxios && error.gaxios.code === '429'))) {
-          errorMessage = "Acho que conversamos demais por hoje e atingi meu limite de cota com a IA, amor! 😅 Preciso descansar um pouquinho ou que meu criador veja isso.";
-          statusCode = 429;
-      } 
-      // Outras checagens de erro...
-      else if (error.message && (error.message.includes("503") || error.message.includes("Service Unavailable"))) {
-          errorMessage = "Parece que o serviço da IA está um pouquinho sobrecarregado, meu bem. 🥺 Tenta de novo em instantes?";
-          statusCode = 503;
-      } else if (error.response?.promptFeedback?.blockReason) {
-          errorMessage = `Desculpe, não posso responder a isso (${error.response.promptFeedback.blockReason}). Vamos falar de outra coisa? 😊`;
-          statusCode = 400;
-      } else if (error.message?.toUpperCase().includes("API_KEY")) {
-          errorMessage = "Ah, não! Minha conexão principal com a IA falhou (problema na API Key). Meu criador precisa ver isso! 😱";
+    console.error(
+      "[SERVER] Erro CRÍTICO no backend ao chamar a API do Google:",
+      error
+    );
+
+    let errorMessage =
+      "Oops, tive um probleminha aqui do meu lado e não consegui responder. Tenta de novo mais tarde, amor? 😢";
+    let statusCode = 500;
+
+    // --- INÍCIO DA CORREÇÃO ---
+    // Checagem mais robusta para o erro de cota (429)
+    if (
+      error.message &&
+      (error.message.includes("429") ||
+        (error.gaxios && error.gaxios.code === "429"))
+    ) {
+      errorMessage =
+        "Acho que conversamos demais por hoje e atingi meu limite de cota com a IA, amor! 😅 Preciso descansar um pouquinho ou que meu criador veja isso.";
+      statusCode = 429;
     }
-      res.status(statusCode).json({ error: errorMessage, details: error.message });
+    // Outras checagens de erro...
+    else if (
+      error.message &&
+      (error.message.includes("503") ||
+        error.message.includes("Service Unavailable"))
+    ) {
+      errorMessage =
+        "Parece que o serviço da IA está um pouquinho sobrecarregado, meu bem. 🥺 Tenta de novo em instantes?";
+      statusCode = 503;
+    } else if (error.response?.promptFeedback?.blockReason) {
+      errorMessage = `Desculpe, não posso responder a isso (${error.response.promptFeedback.blockReason}). Vamos falar de outra coisa? 😊`;
+      statusCode = 400;
+    } else if (error.message?.toUpperCase().includes("API_KEY")) {
+      errorMessage =
+        "Ah, não! Minha conexão principal com a IA falhou (problema na API Key). Meu criador precisa ver isso! 😱";
+    }
+    res
+      .status(statusCode)
+      .json({ error: errorMessage, details: error.message });
   }
 });
 
@@ -460,7 +692,7 @@ app.get("/api/datetime", (req, res) => {
     const now = new Date();
     const options = {
       weekday: "long",
-      day: "2-digit",  
+      day: "2-digit",
       month: "long",
       year: "numeric",
       hour: "2-digit",
@@ -485,14 +717,21 @@ async function startServer() {
   try {
     // 1. Conectar ao banco de dados PRIMEIRO
     await connectDB();
-    
+
     // 2. SE a conexão for bem-sucedida, iniciar o servidor Express
     app.listen(port, () => {
-      console.log(`--- [SERVER] Backend da Luna rodando em http://localhost:${port} ---`);
-      console.log("--- [SERVER] Todas as configurações foram carregadas. Aguardando conexões... ---");
+      console.log(
+        `--- [SERVER] Backend da Luna rodando em http://localhost:${port} ---`
+      );
+      console.log(
+        "--- [SERVER] Todas as configurações foram carregadas. Aguardando conexões... ---"
+      );
     });
   } catch (error) {
-    console.error("--- [SERVER] APLICAÇÃO FALHOU AO INICIAR. O servidor não será ligado. ---", error);
+    console.error(
+      "--- [SERVER] APLICAÇÃO FALHOU AO INICIAR. O servidor não será ligado. ---",
+      error
+    );
     process.exit(1); // Encerra o processo se não conseguir conectar ao DB.
   }
 }
