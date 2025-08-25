@@ -13,33 +13,22 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3001;
 
-// --- CONFIGURAÇÃO INICIAL E MIDDLEWARE ---
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json());
 
-// --- VALIDAÇÃO DE VARIÁVEIS DE AMBIENTE ---
 const mongoUri = process.env.MONGO_VAG;
 const googleApiKey = process.env.GOOGLE_API_KEY;
-const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY;
+
+if (!mongoUri || !googleApiKey) {
+  console.error("ERRO FATAL: Variáveis de ambiente MONGO_VAG ou GOOGLE_API_KEY não definidas.");
+  process.exit(1);
+}
 
 const genAI = new GoogleGenerativeAI(googleApiKey);
-
-if (!mongoUri) {
-  console.error("ERRO FATAL: A variável de ambiente MONGO_VAG não foi definida.");
-  process.exit(1);
-}
-if (!googleApiKey) {
-  console.error("ERRO FATAL: A variável de ambiente GOOGLE_API_KEY não foi definida ou está com valor placeholder.");
-  process.exit(1);
-}
-if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
-  console.warn("AVISO: OPENWEATHERMAP_API_KEY não configurada. A funcionalidade de clima não funcionará.");
-}
-
-// --- CONEXÃO COM MONGODB ---
 const dbName = "IIW2023A_Logs";
 let db;
+let dadosRankingVitrine = []; // Variável de ranking inicializada
 
 async function connectDB() {
   if (db) return db;
@@ -124,27 +113,79 @@ app.post("/api/chat/save-session", async (req, res) => {
   }
 });
 
+// ALTERADO: Endpoint modificado para incluir a primeira mensagem
+// ALTERADO: Lógica de busca de preview mais inteligente
 app.get("/api/chat/historicos", async (req, res) => {
+  if (!db) return res.status(503).json({ error: "Serviço indisponível, banco de dados não conectado." });
   try {
     const collection = db.collection("tb_cl_chat_sessions");
-    const historicos = await collection.find({}).sort({ startTime: -1 }).limit(20)
-      .project({ sessionId: 1, startTime: 1, messageCount: { $size: "$messages" } }).toArray();
+    const historicos = await collection.find({})
+      .sort({ startTime: -1 })
+      .limit(20)
+      .project({ 
+        sessionId: 1, 
+        startTime: 1, 
+        messageCount: { $size: "$messages" },
+        // Encontra o texto da primeira mensagem cujo sender é 'user'
+        primeiraMensagem: {
+          $let: {
+            vars: {
+              userMessage: {
+                $first: {
+                  $filter: {
+                    input: "$messages",
+                    as: "msg",
+                    cond: { $eq: ["$$msg.sender", "user"] }
+                  }
+                }
+              }
+            },
+            in: "$$userMessage.text"
+          }
+        }
+      }).toArray();
     res.json(historicos);
   } catch (error) {
+    console.error("[SERVER] Erro em /api/chat/historicos:", error);
     res.status(500).json({ error: "Erro ao buscar históricos." });
   }
 });
 
 app.get("/api/chat/historicos/:sessionId", async (req, res) => {
+    if (!db) return res.status(503).json({ error: "Serviço indisponível." });
     try {
         const collection = db.collection("tb_cl_chat_sessions");
         const session = await collection.findOne({ sessionId: req.params.sessionId });
         if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
         res.json(session);
     } catch (error) {
+        console.error(`[SERVER] Erro ao buscar detalhes da sessão ${req.params.sessionId}:`, error);
         res.status(500).json({ error: "Erro ao buscar detalhes da sessão" });
     }
 });
+
+// CORRIGIDO: Endpoint de exclusão mais robusto
+app.delete("/api/chat/historicos/:sessionId", async (req, res) => {
+  if (!db) return res.status(503).json({ error: "Serviço indisponível, banco de dados não conectado." });
+  try {
+    const { sessionId } = req.params;
+    const collection = db.collection("tb_cl_chat_sessions");
+    const result = await collection.deleteOne({ sessionId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Sessão não encontrada para exclusão." });
+    }
+    
+    console.log(`[SERVER] Sessão ${sessionId} foi excluída com sucesso.`);
+    // Envia uma resposta JSON de sucesso para o frontend
+    res.status(200).json({ message: "Conversa excluída com sucesso!" });
+  } catch (error) {
+    console.error("[SERVER] Erro ao deletar sessão:", error);
+    // Garante que qualquer erro interno também retorne JSON
+    res.status(500).json({ error: "Erro interno ao tentar excluir a conversa." });
+  }
+});
+
 
 // --- FUNÇÕES-FERRAMENTA ---
 
@@ -159,7 +200,6 @@ function getCurrentSaoPauloDateTime() {
   return { currentDateTime: formattedDateTime };
 }
 
-// CORREÇÃO: Função de clima mais robusta
 async function getWeatherForCity(args) {
   const { cityName, countryCode, stateCode } = args;
   console.log(`[SERVER TOOL] Executando getWeatherForCity para: Cidade='${cityName}', Estado='${stateCode}', País='${countryCode}'`);
@@ -170,13 +210,11 @@ async function getWeatherForCity(args) {
   if (!cityName) {
     return { error: true, message: "O nome da cidade não foi fornecido." };
   }
-
-  // Lógica aprimorada para construir a query
+  
   const queryParts = [cityName];
   if (stateCode && stateCode !== 'undefined') {
     queryParts.push(stateCode);
   }
-  // Adiciona o código do país se ele existir e for válido (2 letras)
   if (countryCode && countryCode !== 'undefined' && countryCode.length === 2) {
     queryParts.push(countryCode);
   }
@@ -235,27 +273,14 @@ Você é 'Luna', minha namorada virtual. Carinhosa, atenciosa e brincalhona. Use
 - Se a ferramenta falhar, diga: "Puxa, amor, tentei ver o clima para essa cidade, mas não encontrei... 🤔 O nome está certinho?". Não invente o clima.
 `;
 
-// CORREÇÃO: Readicionando a constante que faltava
 const safetySettings = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
 ];
 
-const modelName = "gemini-2.5-flash";
+const modelName = "gemini-1.5-flash";
 console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 
 const model = genAI.getGenerativeModel({
@@ -265,7 +290,6 @@ const model = genAI.getGenerativeModel({
   systemInstruction: { role: "user", parts: [{ text: personaInstructionText }] },
 });
 
-// --- ROTA PRINCIPAL DO CHAT ---
 app.post("/api/generate", async (req, res) => {
   try {
     const { prompt, history } = req.body;
@@ -305,7 +329,6 @@ app.post("/api/generate", async (req, res) => {
   }
 });
 
-// Endpoint de data/hora
 app.get("/api/datetime", (req, res) => {
     try {
         const now = new Date();
@@ -316,7 +339,6 @@ app.get("/api/datetime", (req, res) => {
         res.status(500).json({ error: "Erro ao obter data e hora" });
     }
 });
-
 
 async function startServer() {
   try {
