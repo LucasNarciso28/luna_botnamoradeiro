@@ -23,11 +23,13 @@ const mongoUri = process.env.MONGO_VAG;
 const googleApiKey = process.env.GOOGLE_API_KEY;
 const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY;
 
+const genAI = new GoogleGenerativeAI(googleApiKey);
+
 if (!mongoUri) {
   console.error("ERRO FATAL: A variável de ambiente MONGO_VAG não foi definida.");
   process.exit(1);
 }
-if (!googleApiKey || googleApiKey.startsWith("AIzaSy")) {
+if (!googleApiKey) {
   console.error("ERRO FATAL: A variável de ambiente GOOGLE_API_KEY não foi definida ou está com valor placeholder.");
   process.exit(1);
 }
@@ -253,13 +255,13 @@ const safetySettings = [
   },
 ];
 
-const modelName = "gemini-1.5-flash";
+const modelName = "gemini-2.5-flash";
 console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 
 const model = genAI.getGenerativeModel({
   model: modelName,
   tools: [{ functionDeclarations }],
-  safetySettings, // Agora esta variável existe e o erro será resolvido
+  safetySettings,
   systemInstruction: { role: "user", parts: [{ text: personaInstructionText }] },
 });
 
