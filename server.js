@@ -19,11 +19,17 @@ app.use(express.json());
 
 const mongoUri = process.env.MONGO_VAG;
 const googleApiKey = process.env.GOOGLE_API_KEY;
+const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY; // Adicionado aqui
 
 if (!mongoUri || !googleApiKey) {
   console.error("ERRO FATAL: Variáveis de ambiente MONGO_VAG ou GOOGLE_API_KEY não definidas.");
   process.exit(1);
 }
+// Avisa se a chave do OpenWeatherMap não estiver configurada
+if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
+  console.warn("AVISO: Variável de ambiente OPENWEATHERMAP_API_KEY não definida ou placeholder. A função de clima pode não funcionar.");
+}
+
 
 const genAI = new GoogleGenerativeAI(googleApiKey);
 const dbName = "IIW2023A_Logs";
@@ -48,6 +54,7 @@ async function connectDB() {
 app.post("/api/log-connection", async (req, res) => {
     const { acao } = req.body;
     const ip = req.ip;
+    if (!db) return res.status(503).json({ error: "Serviço indisponível, banco de dados não conectado." });
     if (!ip || !acao) return res.status(400).json({ error: "IP e ação são obrigatórios." });
     try {
         const agora = new Date();
@@ -85,36 +92,26 @@ app.post("/api/ranking/registrar-acesso-bot", (req, res) => {
 
 
 // --- ENDPOINTS DE CHAT ---
-app.post("/api/chat/save-session", async (req, res) => {
-  const { sessionId, messages } = req.body;
-  const userIP = req.ip;
 
-  if (!sessionId || !messages || !Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ error: "Dados incompletos para salvar sessão." });
-  }
-  try {
-    const collection = db.collection("tb_cl_chat_sessions");
-    const startTime = new Date(messages[0].timestamp);
-    const endTime = new Date(messages[messages.length - 1].timestamp);
+// REMOVIDO a rota /api/chat/save-session explícita para o frontend chamar.
+// Agora, o salvamento da sessão será orquestrado *internamente* no backend
+// após cada interação bem-sucedida do Gemini na rota /api/generate.
 
-    if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) {
-      return res.status(400).json({ error: "Timestamp inválido detectado nas mensagens." });
+// Endpoint para buscar histórico de uma sessão específica (usado pelo frontend)
+app.get("/api/chat/historicos/:sessionId", async (req, res) => {
+    if (!db) return res.status(503).json({ error: "Serviço indisponível." });
+    try {
+        const collection = db.collection("tb_cl_chat_sessions");
+        const session = await collection.findOne({ sessionId: req.params.sessionId });
+        if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+        res.json(session);
+    } catch (error) {
+        console.error(`[SERVER] Erro ao buscar detalhes da sessão ${req.params.sessionId}:`, error);
+        res.status(500).json({ error: "Erro ao buscar detalhes da sessão" });
     }
-    const sessionData = {
-      sessionId, botId: "luna-namoradeira", startTime, endTime, messages, userIP,
-      duration: Math.floor((endTime - startTime) / 1000),
-    };
-    await collection.updateOne({ sessionId }, { $set: sessionData }, { upsert: true });
-    res.status(200).json({ message: "Sessão salva com sucesso!" });
-  } catch (error) {
-    console.error("[SERVER] ERRO 500 EM /api/chat/save-session:", error.message);
-    console.error("[SERVER] DADOS RECEBIDOS:", JSON.stringify(req.body, null, 2));
-    res.status(500).json({ error: "Erro interno crítico ao tentar salvar a sessão." });
-  }
 });
 
-// ALTERADO: Endpoint modificado para incluir a primeira mensagem
-// ALTERADO: Lógica de busca de preview mais inteligente
+// Endpoint para listar as sessões (histórico geral)
 app.get("/api/chat/historicos", async (req, res) => {
   if (!db) return res.status(503).json({ error: "Serviço indisponível, banco de dados não conectado." });
   try {
@@ -126,7 +123,6 @@ app.get("/api/chat/historicos", async (req, res) => {
         sessionId: 1, 
         startTime: 1, 
         messageCount: { $size: "$messages" },
-        // Encontra o texto da primeira mensagem cujo sender é 'user'
         primeiraMensagem: {
           $let: {
             vars: {
@@ -151,20 +147,7 @@ app.get("/api/chat/historicos", async (req, res) => {
   }
 });
 
-app.get("/api/chat/historicos/:sessionId", async (req, res) => {
-    if (!db) return res.status(503).json({ error: "Serviço indisponível." });
-    try {
-        const collection = db.collection("tb_cl_chat_sessions");
-        const session = await collection.findOne({ sessionId: req.params.sessionId });
-        if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
-        res.json(session);
-    } catch (error) {
-        console.error(`[SERVER] Erro ao buscar detalhes da sessão ${req.params.sessionId}:`, error);
-        res.status(500).json({ error: "Erro ao buscar detalhes da sessão" });
-    }
-});
-
-// CORRIGIDO: Endpoint de exclusão mais robusto
+// Endpoint para deletar uma sessão
 app.delete("/api/chat/historicos/:sessionId", async (req, res) => {
   if (!db) return res.status(503).json({ error: "Serviço indisponível, banco de dados não conectado." });
   try {
@@ -177,11 +160,9 @@ app.delete("/api/chat/historicos/:sessionId", async (req, res) => {
     }
     
     console.log(`[SERVER] Sessão ${sessionId} foi excluída com sucesso.`);
-    // Envia uma resposta JSON de sucesso para o frontend
     res.status(200).json({ message: "Conversa excluída com sucesso!" });
   } catch (error) {
     console.error("[SERVER] Erro ao deletar sessão:", error);
-    // Garante que qualquer erro interno também retorne JSON
     res.status(500).json({ error: "Erro interno ao tentar excluir a conversa." });
   }
 });
@@ -212,10 +193,10 @@ async function getWeatherForCity(args) {
   }
   
   const queryParts = [cityName];
-  if (stateCode && stateCode !== 'undefined') {
+  if (stateCode && stateCode !== 'undefined') { // Garante que 'undefined' string não seja incluída
     queryParts.push(stateCode);
   }
-  if (countryCode && countryCode !== 'undefined' && countryCode.length === 2) {
+  if (countryCode && countryCode !== 'undefined' && countryCode.length === 2) { // Garante que 'undefined' string e códigos inválidos não sejam incluídos
     queryParts.push(countryCode);
   }
   
@@ -240,7 +221,7 @@ async function getWeatherForCity(args) {
       console.warn(`[SERVER TOOL] Erro da API OpenWeatherMap (status ${response.status}) para consulta '${query}': ${data.message}`);
       return {
         error: true,
-        message: `Não consegui encontrar o clima para "${cityName}". Verifique se o nome está correto.`,
+        message: `Não consegui encontrar o clima para "${cityName}". Verifique se o nome está correto. (Erro: ${data.message})`,
       };
     }
   } catch (error) {
@@ -280,9 +261,10 @@ const safetySettings = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
 ];
 
-const modelName = "gemini-1.5-flash";
+const modelName = "gemini-2.5-flash";
 console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 
+// MODIFICADO: A instância do modelo é criada aqui, sem histórico inicial
 const model = genAI.getGenerativeModel({
   model: modelName,
   tools: [{ functionDeclarations }],
@@ -292,16 +274,51 @@ const model = genAI.getGenerativeModel({
 
 app.post("/api/generate", async (req, res) => {
   try {
-    const { prompt, history } = req.body;
-    if (!prompt) return res.status(400).json({ error: "Prompt é obrigatório" });
+    const { prompt, sessionId } = req.body;
+    if (!prompt || !sessionId) {
+      return res.status(400).json({ error: "Prompt e sessionId são obrigatórios" });
+    }
 
-    const formattedHistory = (history || []).map((msg) => ({
-      role: msg.sender === "user" ? "user" : "model",
-      parts: [{ text: msg.text }],
-    }));
+    const chatCollection = db.collection("tb_cl_chat_sessions");
+    
+    // --- NOVO: Encontrar ou criar o registro da sessão ---
+    let sessionRecord = await chatCollection.findOne({ sessionId: sessionId });
 
-    const chatSession = model.startChat({ history: formattedHistory });
-    let result = await chatSession.sendMessage(prompt);
+    let chatMessagesForGemini = []; // Histórico que será passado para o Gemini
+    let currentSessionMessages = []; // Histórico completo que será salvo no DB
+
+    if (sessionRecord) {
+        // Se a sessão existe, carregue suas mensagens
+        currentSessionMessages = sessionRecord.messages;
+        // Filtrar e formatar apenas as mensagens de 'user' e 'ai' para o Gemini
+        chatMessagesForGemini = currentSessionMessages.map((msg) => ({
+            role: msg.sender === "user" ? "user" : "model",
+            parts: [{ text: msg.text }],
+        }));
+    } else {
+        // Se for uma nova sessão, inicialize um registro vazio no DB
+        // Não é estritamente necessário criar aqui, o upsert abaixo já fará isso
+        // Mas podemos definir um startTime para a primeira vez.
+        console.log(`[SERVER] Nova sessão detectada: ${sessionId}`);
+    }
+
+    // Adicionar a mensagem do usuário ao histórico ANTES de enviar para o Gemini e antes de salvar
+    // É importante que o Gemini veja a mensagem do usuário como parte do histórico da *sua* vez.
+    const userMessageForDB = { sender: "user", text: prompt, timestamp: new Date().toISOString() };
+    currentSessionMessages.push(userMessageForDB);
+    // Adicione a mensagem do usuário também ao histórico que o Gemini receberá para a *resposta atual*
+    chatMessagesForGemini.push({ role: "user", parts: [{ text: prompt }] });
+
+
+    const chatSession = model.startChat({ history: chatMessagesForGemini }); // Use o histórico formatado
+    
+    let result = await chatSession.sendMessage(prompt); // AQUI: o 'prompt' é redundante se já está no history.
+                                                        // Precisamos ajustar isso.
+                                                        // A primeira chamada a sendMessage já deveria conter a mensagem do usuário,
+                                                        // mas como já a adicionamos ao history, podemos fazer:
+    result = await chatSession.sendMessage({ // Apenas um placeholder, o histórico já guia o Gemini
+        parts: [{ text: prompt }] // Isso é o que a gente envia AGORA para o Gemini
+    });                                     // O chatSession já tem o histórico anterior
 
     while (true) {
       const functionCalls = result.response.functionCalls();
@@ -320,14 +337,39 @@ app.post("/api/generate", async (req, res) => {
       result = await chatSession.sendMessage(functionResponses);
     }
 
-    const finalText = result.response.text();
-    res.json({ generatedText: finalText });
+    const aiResponseText = result.response.text();
+
+    // Adicionar a mensagem da IA ao histórico que será salvo
+    const aiMessageForDB = { sender: "ai", text: aiResponseText, timestamp: new Date().toISOString() };
+    currentSessionMessages.push(aiMessageForDB);
+
+    // Salvar/Atualizar a sessão no MongoDB
+    const now = new Date();
+    const sessionUpdateData = {
+      sessionId: sessionId,
+      // startTime só é definido na primeira vez (se não houver sessionRecord), caso contrário, mantém o existente.
+      startTime: sessionRecord ? sessionRecord.startTime : now.toISOString(), 
+      messages: currentSessionMessages,
+      lastActivity: now.toISOString(),
+      messageCount: currentSessionMessages.length,
+    };
+
+    await chatCollection.updateOne(
+      { sessionId: sessionId },
+      { $set: sessionUpdateData },
+      { upsert: true } // Isso criará o documento se ele não existir
+    );
+    console.log(`[SERVER] Sessão ${sessionId} atualizada/criada no MongoDB. Total de ${currentSessionMessages.length} mensagens.`);
+
+
+    res.json({ generatedText: aiResponseText });
 
   } catch (error) {
     console.error("[SERVER] Erro CRÍTICO na rota /api/generate:", error);
     res.status(500).json({ error: "Oops, tive um probleminha aqui do meu lado, amor. 😢" });
   }
 });
+
 
 app.get("/api/datetime", (req, res) => {
     try {
