@@ -13,6 +13,30 @@ const port = process.env.PORT || 3001;
 app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json());
+
+// Servir arquivos estáticos
+app.use(express.static("."));
+
+// --- CONFIGURAÇÃO DO ADMIN ---
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "luna_admin_2024";
+
+// --- MIDDLEWARE DE AUTENTICAÇÃO ADMIN ---
+function authenticateAdmin(req, res, next) {
+  const adminPassword = req.headers["x-admin-password"] || req.body.adminPassword;
+  
+  if (!adminPassword || adminPassword !== ADMIN_PASSWORD) {
+    console.warn(`[ADMIN] Tentativa de acesso não autorizado de IP: ${req.ip}`);
+    return res.status(403).json({ error: "Acesso negado. Senha de administrador inválida." });
+  }
+  
+  console.log(`[ADMIN] Acesso autorizado para IP: ${req.ip}`);
+  next();
+}
+
+// --- NOVA COLEÇÃO PARA CONFIGURAÇÕES ---
+const configCollectionName = "tb_cl_bot_config";
+const chatSessionsCollectionName = "tb_cl_chat_sessions";
+
 const mongoUri = process.env.MONGO_VAG;
 const googleApiKey = process.env.GOOGLE_API_KEY;
 const openWeatherMapApiKey = process.env.OPENWEATHERMAP_API_KEY; 
@@ -40,6 +64,112 @@ async function connectDB() {
     throw error;
   }
 }
+
+// --- ENDPOINTS ADMINISTRATIVOS ---
+
+// Endpoint para obter estatísticas do bot
+app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
+  try {
+    const db = await connectDB();
+    const sessionsCollection = db.collection(chatSessionsCollectionName);
+    
+    // Total de conversas
+    const totalConversas = await sessionsCollection.countDocuments();
+    
+    // Total de mensagens (agregação para somar mensagens de todas as sessões)
+    const totalMensagensResult = await sessionsCollection.aggregate([
+      {
+        $project: {
+          messageCount: { $size: "$messages" }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$messageCount" }
+        }
+      }
+    ]).toArray();
+    
+    const totalMensagens = totalMensagensResult[0]?.total || 0;
+    
+    // Últimas 5 conversas
+    const ultimasConversas = await sessionsCollection.find()
+      .sort({ startTime: -1 })
+      .limit(5)
+      .project({
+        sessionId: 1,
+        startTime: 1,
+        messageCount: { $size: "$messages" },
+        primeiraMensagem: 1
+      })
+      .toArray();
+    
+    res.json({
+      totalConversas,
+      totalMensagens,
+      ultimasConversas: ultimasConversas.map(conv => ({
+        sessionId: conv.sessionId,
+        startTime: conv.startTime,
+        messageCount: conv.messageCount,
+        primeiraMensagem: conv.primeiraMensagem || "Nenhuma mensagem"
+      }))
+    });
+    
+  } catch (error) {
+    console.error("[ADMIN] Erro ao buscar estatísticas:", error);
+    res.status(500).json({ error: "Erro interno ao buscar estatísticas" });
+  }
+});
+
+// Endpoint para obter a system instruction atual
+app.get("/api/admin/system-instruction", authenticateAdmin, async (req, res) => {
+  try {
+    const db = await connectDB();
+    const configCollection = db.collection(configCollectionName);
+    
+    const config = await configCollection.findOne({ _id: "system_instruction" });
+    
+    if (config) {
+      res.json({ instruction: config.value });
+    } else {
+      // Retorna a instrução padrão se não houver configuração salva
+      res.json({ instruction: personaInstructionText });
+    }
+    
+  } catch (error) {
+    console.error("[ADMIN] Erro ao buscar system instruction:", error);
+    res.status(500).json({ error: "Erro interno ao buscar configuração" });
+  }
+});
+
+// Endpoint para atualizar a system instruction
+app.post("/api/admin/system-instruction", authenticateAdmin, async (req, res) => {
+  try {
+    const { instruction } = req.body;
+    
+    if (!instruction || instruction.trim().length === 0) {
+      return res.status(400).json({ error: "A instrução não pode estar vazia" });
+    }
+    
+    const db = await connectDB();
+    const configCollection = db.collection(configCollectionName);
+    
+    await configCollection.updateOne(
+      { _id: "system_instruction" },
+      { $set: { value: instruction.trim(), updatedAt: new Date() } },
+      { upsert: true }
+    );
+    
+    console.log("[ADMIN] System instruction atualizada com sucesso");
+    res.json({ message: "Instrução de sistema atualizada com sucesso!" });
+    
+  } catch (error) {
+    console.error("[ADMIN] Erro ao atualizar system instruction:", error);
+    res.status(500).json({ error: "Erro interno ao atualizar configuração" });
+  }
+});
+
 app.post("/api/log-connection", async (req, res) => {
     const { acao } = req.body;
     const ip = req.ip;
@@ -153,7 +283,7 @@ function getCurrentSaoPauloDateTime() {
 }
 async function getWeatherForCity(args) {
   const { cityName, countryCode, stateCode } = args;
-  console.log(`[SERVER TOOL] Executando getWeatherForCity para: Cidade=\'${cityName}\'`, `Estado=\'${stateCode}\'`, `País=\'${countryCode}\'`);
+  console.log(`[SERVER TOOL] Executando getWeatherForCity para: Cidade=\\'${cityName}\\'`, `Estado=\\'${stateCode}\\'`, `País=\\'${countryCode}\\'`);
   if (!openWeatherMapApiKey || openWeatherMapApiKey === "SUA_CHAVE_OPENWEATHERMAP_AQUI") {
     return { error: true, message: "A funcionalidade de clima está indisponível (API Key não configurada)." };
   }
@@ -211,75 +341,144 @@ const safetySettings = [
 ];
 const modelName = "gemini-2.5-flash";
 console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
-const model = genAI.getGenerativeModel({
-  model: modelName,
-  tools: [{ functionDeclarations }],
-  safetySettings,
-  systemInstruction: { role: "user", parts: [{ text: personaInstructionText }] },
-});
-app.post("/api/generate", async (req, res) => {
+
+// --- MODIFICAÇÃO NA ROTA PRINCIPAL DO CHAT PARA USAR CONFIGURAÇÃO DO BANCO ---
+
+// Função auxiliar para buscar a system instruction do banco
+async function getSystemInstruction() {
   try {
-    const { prompt, sessionId } = req.body;
-    if (!prompt || !sessionId) {
-      return res.status(400).json({ error: "Prompt e sessionId são obrigatórios" });
-    }
-    const chatCollection = db.collection("tb_cl_chat_sessions");
-    let sessionRecord = await chatCollection.findOne({ sessionId: sessionId });
-    let chatMessagesForGemini = []; 
-    let currentSessionMessages = []; 
-    if (sessionRecord) {
-        currentSessionMessages = sessionRecord.messages;
-        chatMessagesForGemini = currentSessionMessages.map((msg) => ({
-            role: msg.sender === "user" ? "user" : "model",
-            parts: [{ text: msg.text }],
-        }));
-    } else {
-        console.log(`[SERVER] Nova sessão detectada: ${sessionId}`);
-    }
-    const userMessageForDB = { sender: "user", text: prompt, timestamp: new Date().toISOString() };
-    currentSessionMessages.push(userMessageForDB);
-    chatMessagesForGemini.push({ role: "user", parts: [{ text: prompt }] });
-    const chatSession = model.startChat({ history: chatMessagesForGemini }); 
-    let result = await chatSession.sendMessage(prompt); 
-    result = await chatSession.sendMessage({ 
-        parts: [{ text: prompt }] 
-    });                                     
-    while (true) {
-      const functionCalls = result.response.functionCalls();
-      if (!functionCalls || functionCalls.length === 0) break;
-      console.log("[SERVER] Modelo solicitou chamada de função:", functionCalls);
-      const functionResponses = await Promise.all(
-        functionCalls.map(async (call) => {
-          const functionToCall = availableFunctions[call.name];
-          const response = functionToCall ? await functionToCall(call.args) : { error: `Função ${call.name} não encontrada.` };
-          return { functionResponse: { name: call.name, response } };
-        })
-      );
-      result = await chatSession.sendMessage(functionResponses);
-    }
-    const aiResponseText = result.response.text();
-    const aiMessageForDB = { sender: "ai", text: aiResponseText, timestamp: new Date().toISOString() };
-    currentSessionMessages.push(aiMessageForDB);
-    const now = new Date();
-    const sessionUpdateData = {
-      sessionId: sessionId,
-      startTime: sessionRecord ? sessionRecord.startTime : now.toISOString(), 
-      messages: currentSessionMessages,
-      lastActivity: now.toISOString(),
-      messageCount: currentSessionMessages.length,
-    };
-    await chatCollection.updateOne(
-      { sessionId: sessionId },
-      { $set: sessionUpdateData },
-      { upsert: true } 
-    );
-    console.log(`[SERVER] Sessão ${sessionId} atualizada/criada no MongoDB. Total de ${currentSessionMessages.length} mensagens.`);
-    res.json({ generatedText: aiResponseText });
+    const db = await connectDB();
+    const configCollection = db.collection(configCollectionName);
+    
+    const config = await configCollection.findOne({ _id: "system_instruction" });
+    return config ? config.value : personaInstructionText;
+    
   } catch (error) {
-    console.error("[SERVER] Erro CRÍTICO na rota /api/generate:", error);
-    res.status(500).json({ error: "Oops, tive um probleminha aqui do meu lado, amor. 😢" });
+    console.error("[SERVER] Erro ao buscar system instruction do banco, usando padrão:", error);
+    return personaInstructionText;
+  }
+}
+
+// Modificar a rota /api/generate para usar a system instruction do banco
+app.post("/api/generate", async (req, res) => {
+  console.log(`\n--- [SERVER] Nova Requisição para /api/generate ---`);
+  const { prompt, sessionId } = req.body;
+
+  if (!prompt) {
+    return res.status(400).json({ error: "Mensagem (prompt) é obrigatória" });
+  }
+  console.log(`[SERVER] Prompt Recebido: "${prompt}"`);
+
+  try {
+    // Buscar o histórico da sessão específica
+    let chatHistory = [];
+    if (sessionId) {
+      const db = await connectDB();
+      const sessionsCollection = db.collection(chatSessionsCollectionName);
+      const session = await sessionsCollection.findOne({ sessionId });
+      
+      if (session && session.messages) {
+        chatHistory = session.messages.map(msg => ({
+          role: msg.sender === "user" ? "user" : "model",
+          parts: [{ text: msg.text }],
+        }));
+      }
+    }
+
+    // Obter a system instruction atual do banco
+    const currentSystemInstruction = await getSystemInstruction();
+    
+    // Criar modelo com a system instruction atual
+    const dynamicModel = genAI.getGenerativeModel({
+      model: modelName,
+      tools: [{ functionDeclarations }],
+      safetySettings: safetySettings,
+      systemInstruction: {
+        role: "user",
+        parts: [{ text: currentSystemInstruction }],
+      },
+    });
+
+    // Resto do código permanece igual...
+    const chatSession = dynamicModel.startChat({
+      history: chatHistory,
+      generationConfig: { temperature: 0.7 },
+    });
+
+    let result = await chatSession.sendMessage(prompt);
+    
+    // Loop para lidar com chamadas de função
+    while (true) {
+        const functionCalls = result.response.functionCalls();
+        if (!functionCalls || functionCalls.length === 0) {
+            break;
+        }
+
+        console.log("[SERVER] Modelo solicitou chamada de função:", JSON.stringify(functionCalls, null, 2));
+        
+        const functionResponses = await Promise.all(
+            functionCalls.map(async (call) => {
+                const functionToCall = availableFunctions[call.name];
+                const apiResponse = functionToCall ? await functionToCall(call.args) : { error: true, message: `Função ${call.name} não implementada.` };
+                return { functionResponse: { name: call.name, response: apiResponse } };
+            })
+        );
+        
+        result = await chatSession.sendMessage(functionResponses);
+    }
+
+    const finalText = result.response.text();
+    console.log(`[SERVER] Resposta final da IA: "${finalText.substring(0, 100)}..."`);
+    
+    // Salvar a mensagem no histórico da sessão
+    if (sessionId) {
+      const db = await connectDB();
+      const sessionsCollection = db.collection(chatSessionsCollectionName);
+      
+      const newMessage = {
+        sender: "ai",
+        text: finalText,
+        timestamp: new Date().toISOString()
+      };
+      
+      await sessionsCollection.updateOne(
+        { sessionId },
+        { 
+          $push: { messages: newMessage },
+          $setOnInsert: { 
+            startTime: new Date().toISOString(),
+            primeiraMensagem: prompt.substring(0, 100)
+          }
+        },
+        { upsert: true }
+      );
+    }
+    
+    res.json({ generatedText: finalText });
+
+  } catch (error) {
+      console.error("[SERVER] Erro CRÍTICO no backend ao chamar a API do Google:", error);
+      
+      let errorMessage = "Oops, tive um probleminha aqui do meu lado e não consegui responder. Tenta de novo mais tarde, amor? 😢";
+      let statusCode = 500;
+      
+      if (error.message && (error.message.includes("429") || (error.gaxios && error.gaxios.code === '429'))) {
+          errorMessage = "Acho que conversamos demais por hoje e atingi meu limite de cota com a IA, amor! 😅 Preciso descansar um pouquinho ou que meu criador veja isso.";
+          statusCode = 429;
+      } else if (error.message && (error.message.includes("503") || error.message.includes("Service Unavailable"))) {
+          errorMessage = "Parece que o serviço da IA está um pouquinho sobrecarregado, meu bem. 🥺 Tenta de novo em instantes?";
+          statusCode = 503;
+      } else if (error.response?.promptFeedback?.blockReason) {
+          errorMessage = `Desculpe, não posso responder a isso (${error.response.promptFeedback.blockReason}). Vamos falar de outra coisa? 😊`;
+          statusCode = 400;
+      } else if (error.message?.toUpperCase().includes("API_KEY")) {
+          errorMessage = "Ah, não! Minha conexão principal com a IA falhou (problema na API Key). Meu criador precisa ver isso! 😱";
+      }
+      
+      res.status(statusCode).json({ error: errorMessage, details: error.message });
   }
 });
+
 app.get("/api/datetime", (req, res) => {
     try {
         const now = new Date();

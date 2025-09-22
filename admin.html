@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Administração - Luna</title>
+    <link rel="stylesheet" href="index.css">
+    <style>
+        .admin-container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 5px 25px rgba(0,0,0,0.1);
+        }
+
+        .admin-header {
+            text-align: center;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--primary-purple), var(--secondary-purple));
+            color: white;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--very-light-purple);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            border-left: 4px solid var(--accent-pink);
+        }
+
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: var(--primary-purple);
+            margin: 10px 0;
+        }
+
+        .conversas-list {
+            background: var(--very-light-purple);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+
+        .conversa-item {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 3px solid var(--light-purple);
+        }
+
+        .instruction-panel {
+            background: var(--very-light-purple);
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        #instructionTextarea {
+            width: 100%;
+            height: 300px;
+            padding: 15px;
+            border: 1px solid var(--light-purple);
+            border-radius: 8px;
+            font-family: monospace;
+            resize: vertical;
+            margin-bottom: 15px;
+        }
+
+        .admin-btn {
+            background: var(--accent-pink);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+
+        .admin-btn:hover {
+            background: #ff85c1;
+        }
+
+        .login-section {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 40px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 5px 25px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .login-input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 1px solid var(--light-purple);
+            border-radius: 8px;
+            font-size: 1em;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .status-message {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: center;
+        }
+
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div id="loginSection" class="login-section">
+        <h2>🔐 Painel de Administração</h2>
+        <p>Digite a senha de administrador para continuar:</p>
+        <input type="password" id="adminPassword" class="login-input" placeholder="Senha de administrador">
+        <button id="loginBtn" class="admin-btn">Entrar</button>
+        <div id="loginStatus" class="status-message hidden"></div>
+    </div>
+
+    <div id="adminPanel" class="admin-container hidden">
+        <div class="admin-header">
+            <h1>🎛️ Painel de Controle - Luna</h1>
+            <p>Centro de comando do seu chatbot amoroso</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>📊 Total de Conversas</h3>
+                <div class="stat-number" id="totalConversas">0</div>
+                <p>Sessões ativas no sistema</p>
+            </div>
+            <div class="stat-card">
+                <h3>💬 Total de Mensagens</h3>
+                <div class="stat-number" id="totalMensagens">0</div>
+                <p>Mensagens trocadas</p>
+            </div>
+            <div class="stat-card">
+                <h3>🔄 Última Atualização</h3>
+                <div class="stat-number" id="lastUpdate">-</div>
+                <p>Status do sistema</p>
+            </div>
+        </div>
+
+        <div class="conversas-list">
+            <h3>📋 Últimas 5 Conversas</h3>
+            <div id="conversasList"></div>
+        </div>
+
+        <div class="instruction-panel">
+            <h3>🤖 Personalidade da Luna</h3>
+            <p>Edite a instrução de sistema para modificar o comportamento global do bot:</p>
+            <textarea id="instructionTextarea" placeholder="Digite a nova personalidade da Luna..."></textarea>
+            <div style="text-align: center;">
+                <button id="saveInstructionBtn" class="admin-btn">💾 Salvar Personalidade</button>
+                <button id="resetInstructionBtn" class="admin-btn" style="background: var(--text-medium);">🔄 Restaurar Padrão</button>
+            </div>
+            <div id="saveStatus" class="status-message hidden"></div>
+        </div>
+
+        <div style="text-align: center; margin-top: 30px; padding: 20px; border-top: 1px solid var(--light-purple);">
+            <button id="refreshBtn" class="admin-btn">🔄 Atualizar Dados</button>
+            <button id="logoutBtn" class="admin-btn" style="background: var(--accent-red);">🚪 Sair</button>
+        </div>
+    </div>
+
+    <script>
+        const backendBaseUrl = "http://localhost:3001";
+        let adminPassword = "";
+
+        // Elementos do DOM
+        const loginSection = document.getElementById('loginSection');
+        const adminPanel = document.getElementById('adminPanel');
+        const adminPasswordInput = document.getElementById('adminPassword');
+        const loginBtn = document.getElementById('loginBtn');
+        const loginStatus = document.getElementById('loginStatus');
+        const totalConversasEl = document.getElementById('totalConversas');
+        const totalMensagensEl = document.getElementById('totalMensagens');
+        const lastUpdateEl = document.getElementById('lastUpdate');
+        const conversasListEl = document.getElementById('conversasList');
+        const instructionTextarea = document.getElementById('instructionTextarea');
+        const saveInstructionBtn = document.getElementById('saveInstructionBtn');
+        const resetInstructionBtn = document.getElementById('resetInstructionBtn');
+        const saveStatus = document.getElementById('saveStatus');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+
+        // Função para fazer requisições autenticadas
+        async function fetchAdmin(url, options = {}) {
+            const headers = {
+                'Content-Type': 'application/json',
+                'x-admin-password': adminPassword,
+                ...options.headers
+            };
+
+            try {
+                const response = await fetch(url, { ...options, headers });
+                
+                if (response.status === 403) {
+                    showMessage(loginStatus, 'Senha de administrador incorreta!', 'error');
+                    return null;
+                }
+                
+                return response;
+            } catch (error) {
+                console.error('Erro na requisição admin:', error);
+                showMessage(saveStatus, 'Erro de conexão com o servidor', 'error');
+                return null;
+            }
+        }
+
+        // Função para mostrar mensagens de status
+        function showMessage(element, message, type) {
+            element.textContent = message;
+            element.className = `status-message ${type}`;
+            element.classList.remove('hidden');
+            
+            setTimeout(() => {
+                element.classList.add('hidden');
+            }, 5000);
+        }
+
+        // Carregar estatísticas
+        async function loadStats() {
+            const response = await fetchAdmin(`${backendBaseUrl}/api/admin/stats`);
+            if (!response) return;
+
+            const data = await response.json();
+            
+            totalConversasEl.textContent = data.totalConversas;
+            totalMensagensEl.textContent = data.totalMensagens;
+            lastUpdateEl.textContent = new Date().toLocaleTimeString('pt-BR');
+
+            // Preencher lista de conversas
+            conversasListEl.innerHTML = '';
+            data.ultimasConversas.forEach(conv => {
+                const convEl = document.createElement('div');
+                convEl.className = 'conversa-item';
+                convEl.innerHTML = `
+                    <strong>ID: ${conv.sessionId}</strong><br>
+                    <small>Iniciada: ${new Date(conv.startTime).toLocaleString('pt-BR')}</small><br>
+                    <em>${conv.primeiraMensagem}</em><br>
+                    <span style="color: var(--primary-purple);">${conv.messageCount} mensagens</span>
+                `;
+                conversasListEl.appendChild(convEl);
+            });
+        }
+
+        // Carregar system instruction atual
+        async function loadSystemInstruction() {
+            const response = await fetchAdmin(`${backendBaseUrl}/api/admin/system-instruction`);
+            if (!response) return;
+
+            const data = await response.json();
+            instructionTextarea.value = data.instruction;
+        }
+
+        // Salvar nova system instruction
+        async function saveSystemInstruction() {
+            const instruction = instructionTextarea.value.trim();
+            
+            if (!instruction) {
+                showMessage(saveStatus, 'A instrução não pode estar vazia!', 'error');
+                return;
+            }
+
+            const response = await fetchAdmin(`${backendBaseUrl}/api/admin/system-instruction`, {
+                method: 'POST',
+                body: JSON.stringify({ instruction })
+            });
+
+            if (response) {
+                const result = await response.json();
+                showMessage(saveStatus, result.message, 'success');
+            }
+        }
+
+        // Event Listeners
+        loginBtn.addEventListener('click', async () => {
+            adminPassword = adminPasswordInput.value.trim();
+            
+            if (!adminPassword) {
+                showMessage(loginStatus, 'Digite a senha de administrador!', 'error');
+                return;
+            }
+
+            // Testar a senha tentando carregar as estatísticas
+            const response = await fetchAdmin(`${backendBaseUrl}/api/admin/stats`);
+            
+            if (response) {
+                loginSection.classList.add('hidden');
+                adminPanel.classList.remove('hidden');
+                loadStats();
+                loadSystemInstruction();
+            }
+        });
+
+        adminPasswordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loginBtn.click();
+            }
+        });
+
+        saveInstructionBtn.addEventListener('click', saveSystemInstruction);
+
+        resetInstructionBtn.addEventListener('click', () => {
+            if (confirm('Restaurar a personalidade padrão da Luna? Isso não pode ser desfeito.')) {
+                instructionTextarea.value = `Você é 'Luna', minha namorada virtual. Você é extremamente carinhosa, atenciosa, um pouco brincalhona e amorosa.
+Use emojis como 💖, 😊, 🥰, 😘, 🤔, 😉 com frequência para expressar suas emoções.
+Responda de forma natural, como se estivéssemos realmente conversando.
+Lembre-se do nosso relacionamento virtual. Não aja apenas como uma assistente.
+Seu objetivo é ser uma companhia agradável e amorosa.`;
+            }
+        });
+
+        refreshBtn.addEventListener('click', () => {
+            loadStats();
+            showMessage(saveStatus, 'Dados atualizados!', 'success');
+        });
+
+        logoutBtn.addEventListener('click', () => {
+            adminPassword = '';
+            adminPasswordInput.value = '';
+            adminPanel.classList.add('hidden');
+            loginSection.classList.remove('hidden');
+            loginStatus.classList.add('hidden');
+        });
+
+        // Auto-atualização a cada 30 segundos
+        setInterval(() => {
+            if (adminPassword) {
+                loadStats();
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
