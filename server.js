@@ -33,6 +33,19 @@ function authenticateAdmin(req, res, next) {
   next();
 }
 
+function authenticateUser(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: "Token não fornecido" });
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Token inválido" });
+  }
+}
+
 // --- NOVA COLEÇÃO PARA CONFIGURAÇÕES ---
 const configCollectionName = "tb_cl_bot_config";
 const chatSessionsCollectionName = "tb_cl_chat_sessions";
@@ -119,6 +132,61 @@ app.get("/api/admin/stats", authenticateAdmin, async (req, res) => {
   } catch (error) {
     console.error("[ADMIN] Erro ao buscar estatísticas:", error);
     res.status(500).json({ error: "Erro interno ao buscar estatísticas" });
+  }
+});
+
+// GET /api/user/preferences - Buscar instrução personalizada do usuário
+app.get("/api/user/preferences", authenticateUser, async (req, res) => {
+  try {
+    const db = await connectDB();
+    const usersCollection = db.collection("tb_cl_users"); // Nome da coleção de usuários
+    
+    const user = await usersCollection.findOne({ _id: req.userId });
+    
+    if (!user) {
+      return res.status(404).json({ error: "Usuário não encontrado" });
+    }
+    
+    res.json({ 
+      customInstruction: user.customInstruction || "",
+      message: "Preferências carregadas com sucesso"
+    });
+    
+  } catch (error) {
+    console.error("[SERVER] Erro ao buscar preferências:", error);
+    res.status(500).json({ error: "Erro interno ao buscar preferências" });
+  }
+});
+
+// PUT /api/user/preferences - Atualizar instrução personalizada
+app.put("/api/user/preferences", authenticateUser, async (req, res) => {
+  try {
+    const { customInstruction } = req.body;
+    
+    if (customInstruction === undefined) {
+      return res.status(400).json({ error: "Instrução personalizada é obrigatória" });
+    }
+    
+    const db = await connectDB();
+    const usersCollection = db.collection("tb_cl_users");
+    
+    const result = await usersCollection.updateOne(
+      { _id: req.userId },
+      { $set: { customInstruction: customInstruction || "" } }
+    );
+    
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Usuário não encontrado" });
+    }
+    
+    res.json({ 
+      message: "Personalidade salva com sucesso!",
+      customInstruction 
+    });
+    
+  } catch (error) {
+    console.error("[SERVER] Erro ao atualizar preferências:", error);
+    res.status(500).json({ error: "Erro interno ao salvar preferências" });
   }
 });
 
@@ -345,29 +413,50 @@ console.log(`--- [SERVER] Utilizando o modelo Gemini: ${modelName} ---`);
 // --- MODIFICAÇÃO NA ROTA PRINCIPAL DO CHAT PARA USAR CONFIGURAÇÃO DO BANCO ---
 
 // Função auxiliar para buscar a system instruction do banco
-async function getSystemInstruction() {
+async function getInstructionForUser(userId) {
   try {
-    const db = await connectDB();
-    const configCollection = db.collection(configCollectionName);
+    // 1. Primeiro tenta buscar a instrução personalizada do usuário
+    if (userId) {
+      const db = await connectDB();
+      const usersCollection = db.collection("tb_cl_users");
+      const user = await usersCollection.findOne({ _id: userId });
+      
+      if (user && user.customInstruction && user.customInstruction.trim() !== "") {
+        console.log(`[SERVER] Usando instrução personalizada do usuário ${userId}`);
+        return user.customInstruction;
+      }
+    }
     
+    // 2. Se não tiver personalizada, busca a global do admin
+    const db = await connectDB();
+    const configCollection = db.collection("tb_cl_bot_config");
     const config = await configCollection.findOne({ _id: "system_instruction" });
-    return config ? config.value : personaInstructionText;
+    
+    if (config && config.value) {
+      console.log("[SERVER] Usando instrução global do admin");
+      return config.value;
+    }
+    
+    // 3. Fallback para a instrução padrão hardcoded
+    console.log("[SERVER] Usando instrução padrão hardcoded");
+    return personaInstructionText;
     
   } catch (error) {
-    console.error("[SERVER] Erro ao buscar system instruction do banco, usando padrão:", error);
+    console.error("[SERVER] Erro ao buscar instrução:", error);
+    // Fallback em caso de erro
     return personaInstructionText;
   }
 }
 
 // Modificar a rota /api/generate para usar a system instruction do banco
-app.post("/api/generate", async (req, res) => {
+app.post("/api/generate", authenticateUser, async (req, res) => { // Adicione authenticateUser aqui
   console.log(`\n--- [SERVER] Nova Requisição para /api/generate ---`);
   const { prompt, sessionId } = req.body;
+  const userId = req.userId; // Obtido do middleware
 
   if (!prompt) {
     return res.status(400).json({ error: "Mensagem (prompt) é obrigatória" });
   }
-  console.log(`[SERVER] Prompt Recebido: "${prompt}"`);
 
   try {
     // Buscar o histórico da sessão específica
@@ -386,7 +475,7 @@ app.post("/api/generate", async (req, res) => {
     }
 
     // Obter a system instruction atual do banco
-    const currentSystemInstruction = await getSystemInstruction();
+    const currentSystemInstruction = await getInstructionForUser(userId);
     
     // Criar modelo com a system instruction atual
     const dynamicModel = genAI.getGenerativeModel({
